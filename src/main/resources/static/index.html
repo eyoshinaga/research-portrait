@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>科研人员知识图谱</title>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: "Microsoft YaHei", sans-serif; background: #f5f7fa; }
+        #top-bar {
+            height: 50px; background: #fff; box-shadow: 0 1px 4px rgba(0,0,0,0.1);
+            padding: 0 20px; display: flex; align-items: center; justify-content: space-between;
+        }
+        #graph-container { width: 100vw; height: calc(100vh - 50px); }
+        .title { font-size: 18px; font-weight: bold; color: #333; }
+        .ctrl-group { display: flex; gap: 10px; align-items: center; }
+        button { padding: 6px 12px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
+        button:hover { background: #f0f0f0; }
+        #search-input { padding: 6px 10px; width: 220px; border: 1px solid #ccc; border-radius: 4px; }
+    </style>
+</head>
+<body>
+<div id="top-bar">
+    <div class="title">科研人员知识图谱</div>
+    <div class="ctrl-group">
+        <input id="search-input" placeholder="搜索节点名称" />
+        <button id="search-btn">搜索定位</button>
+        <button id="zoomIn">放大</button>
+        <button id="zoomOut">缩小</button>
+        <button id="resetView">重置视图</button>
+    </div>
+</div>
+<div id="graph-container"></div>
+
+<script>
+    const chartDom = document.getElementById('graph-container');
+    const myChart = echarts.init(chartDom);
+
+    // 全局存储完整图谱数据
+    let allNodes = [];
+    let allLinks = [];
+    let option = null;
+
+    const categories = [
+        { name: 'Researcher', itemStyle: { color: '#5470c6' } },
+        { name: 'Institution', itemStyle: { color: '#91cc75' } },
+        { name: 'Paper', itemStyle: { color: '#fac858' } },
+        { name: 'Patent', itemStyle: { color: '#ee6666' } },
+        { name: 'Project', itemStyle: { color: '#73c0de' } }
+    ];
+
+    // 渲染图谱
+    function renderGraph(nodes, links) {
+        const nodeMap = new Map();
+        nodes.forEach(n => nodeMap.set(n.id, n));
+        const uniqueNodes = Array.from(nodeMap.values());
+
+        option = {
+            tooltip: {
+                trigger: 'item',
+                formatter: params => {
+                    try {
+                        if (params.dataType === 'node') {
+                            const d = params.data || {};
+                            const p = d.props || {};
+                            let tip = `<div>${d.name || '未知'}</div><hr style="margin:4px 0"/>`;
+                            Object.entries(p).forEach(([k, v]) => tip += `${k}: ${v || '-'}<br/>`);
+                            return tip;
+                        }
+                        return params.data?.name || '';
+                    } catch (e) { return params.data?.name || '加载中' }
+                }
+            },
+            legend: [{ data: categories.map(c => c.name), top: 10, left: 'center' }],
+            toolbox: {
+                show: true, feature: { dataZoom: {}, restore: {}, saveAsImage: {} }, right: 20, top: 10
+            },
+            series: [{
+                type: 'graph', layout: 'force', roam: true, draggable: true,
+                focusNodeAdjacency: true,
+                force: { repulsion: 1200, edgeLength: 160, gravity: 0.1, friction: 0.6 },
+                data: uniqueNodes.map(item => ({
+                    id: item.id,
+                    name: (item.props?.name || item.props?.instName || item.id + '').toString(),
+                    category: item.labels?.[0] || 'Other',
+                    props: item.props || {},
+                    symbolSize: 36,
+                    label: { show: true, fontSize: 12, width: 80, overflow: 'truncate' }
+                })),
+                links: links.map(l => ({
+                    source: l.source, target: l.target, name: l.type || ''
+                })),
+                categories: categories,
+                labelLayout: { hideOverlap: true },
+                lineStyle: { curveness: 0.2 }
+            }]
+        };
+        myChart.setOption(option, true);
+    }
+
+    // ============================
+    // ✅ 双击展开邻居（核心功能）
+    // ============================
+    myChart.on('dblclick', async (params) => {
+        if (params.dataType !== 'node') return;
+        const nodeId = params.data.id;
+        if (!nodeId) return;
+
+        try {
+            const res = await fetch(`/portrait/api/graph/expand/${nodeId}`);
+            const data = await res.json();
+
+            // 合并新节点 + 新关系（自动去重）
+            data.nodes.forEach(n => {
+                if (!allNodes.some(exist => exist.id === n.id)) allNodes.push(n);
+            });
+            data.links.forEach(l => {
+                if (!allLinks.some(exist => exist.id === l.id)) allLinks.push(l);
+            });
+
+            renderGraph(allNodes, allLinks);
+            console.log('✅ 展开成功，节点数：', allNodes.length);
+        } catch (e) {
+            console.error('展开邻居失败', e);
+            alert('展开失败，请检查控制台');
+        }
+    });
+
+    // 搜索定位
+    function searchAndLocate(keyword) {
+        if (!keyword.trim()) return alert('请输入关键词');
+        keyword = keyword.toLowerCase();
+        const list = option.series[0].data;
+        const target = list.find(n => (n.name || '').toLowerCase().includes(keyword));
+        if (!target) return alert('未找到节点');
+        myChart.dispatchAction({ type: 'unfocusNodeAdjacency' });
+        myChart.dispatchAction({ type: 'focusNodeAdjacency', seriesIndex: 0, dataIndex: list.indexOf(target) });
+        alert(`已定位：${target.name}`);
+    }
+
+    // 加载全量图谱
+    fetch('/portrait/api/graph/full')
+        .then(r => r.json())
+        .then(data => {
+            allNodes = data.nodes || [];
+            allLinks = data.links || [];
+            renderGraph(allNodes, allLinks);
+        }).catch(e => { console.error(e); alert('图谱加载失败') });
+
+    // 事件
+    window.addEventListener('resize', () => myChart.resize());
+    document.getElementById('search-btn').onclick = () => searchAndLocate(document.getElementById('search-input').value);
+    document.getElementById('search-input').onkeydown = e => e.key === 'Enter' && searchAndLocate(e.target.value);
+    document.getElementById('zoomIn').onclick = () => myChart.dispatchAction({ type: 'dataZoom', delta: 10 });
+    document.getElementById('zoomOut').onclick = () => myChart.dispatchAction({ type: 'dataZoom', delta: -10 });
+    document.getElementById('resetView').onclick = () => {
+        myChart.dispatchAction({ type: 'restore' });
+        myChart.dispatchAction({ type: 'unfocusNodeAdjacency' });
+        fetch('/portrait/api/graph/full').then(r=>r.json()).then(d=>{ allNodes=d.nodes||[]; allLinks=d.links||[]; renderGraph(allNodes,allLinks); });
+    };
+
+    // 图例筛选
+    myChart.on('legendselectchanged', p => {
+        const sel = p.selected;
+        const nodes = allNodes.filter(n => sel[n.labels?.[0]]);
+        const ids = new Set(nodes.map(n => n.id));
+        const links = allLinks.filter(l => ids.has(l.source) && ids.has(l.target));
+        renderGraph(nodes, links);
+    });
+</script>
+</body>
+</html>
