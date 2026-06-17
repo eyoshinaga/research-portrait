@@ -12,8 +12,14 @@ public class Institution {
     @Property("instName")
     private String instName;
 
+    @Property("name")
+    private String name;
+
     @Property("type")
     private String type;
+
+    @Property("country")
+    private String country;
 
     public Institution() {}
 
@@ -45,5 +51,21 @@ public class Institution {
 
     public void setType(String type) {
         this.type = type;
+    }
+
+    public String getName() {
+        return name;
+    }
+
+    public void setName(String name) {
+        this.name = name;
+    }
+
+    public String getCountry() {
+        return country;
+    }
+
+    public void setCountry(String country) {
+        this.country = country;
     }
 }

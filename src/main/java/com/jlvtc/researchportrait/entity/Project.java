@@ -26,6 +26,12 @@ public class Project {
     @Property("projLevel")
     private String projLevel;
 
+    @Property("source")
+    private String source;
+
+    @Property("status")
+    private String status;
+
     public Project() {}
 
     // getter & setter
@@ -75,5 +81,21 @@ public class Project {
 
     public void setProjLevel(String projLevel) {
         this.projLevel = projLevel;
+    }
+
+    public String getSource() {
+        return source;
+    }
+
+    public void setSource(String source) {
+        this.source = source;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 }

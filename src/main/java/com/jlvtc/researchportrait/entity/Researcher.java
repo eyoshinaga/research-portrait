@@ -31,6 +31,15 @@ public class Researcher {
     @Property("researchField")
     private String researchField;
 
+    @Property("disciplineCategory")
+    private String disciplineCategory;
+
+    @Property("influenceIndex")
+    private Double influenceIndex;
+
+    // 隶属机构ID (用于同步)
+    private Long institutionId;
+
     // 隶属机构: BELONG_TO
     @Relationship(type = "BELONG_TO", direction = Relationship.Direction.OUTGOING)
     private Institution institution;
@@ -160,5 +169,29 @@ public class Researcher {
 
     public void setCooperators(Set<Researcher> cooperators) {
         this.cooperators = cooperators;
+    }
+
+    public String getDisciplineCategory() {
+        return disciplineCategory;
+    }
+
+    public void setDisciplineCategory(String disciplineCategory) {
+        this.disciplineCategory = disciplineCategory;
+    }
+
+    public Double getInfluenceIndex() {
+        return influenceIndex;
+    }
+
+    public void setInfluenceIndex(Double influenceIndex) {
+        this.influenceIndex = influenceIndex;
+    }
+
+    public Long getInstitutionId() {
+        return institutionId;
+    }
+
+    public void setInstitutionId(Long institutionId) {
+        this.institutionId = institutionId;
     }
 }

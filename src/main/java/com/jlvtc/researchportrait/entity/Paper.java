@@ -29,6 +29,9 @@ public class Paper {
     @Property("subjectField")
     private String subjectField;
 
+    @Property("impactFactor")
+    private Double impactFactor;
+
     public Paper() {}
 
     // getter & setter
@@ -86,5 +89,13 @@ public class Paper {
 
     public void setSubjectField(String subjectField) {
         this.subjectField = subjectField;
+    }
+
+    public Double getImpactFactor() {
+        return impactFactor;
+    }
+
+    public void setImpactFactor(Double impactFactor) {
+        this.impactFactor = impactFactor;
     }
 }

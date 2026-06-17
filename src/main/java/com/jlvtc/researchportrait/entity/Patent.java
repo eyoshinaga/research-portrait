@@ -23,6 +23,12 @@ public class Patent {
     @Property("patentType")
     private String patentType;
 
+    @Property("grantDate")
+    private LocalDate grantDate;
+
+    @Property("status")
+    private String status;
+
     public Patent() {}
 
     // getter & setter
@@ -64,5 +70,21 @@ public class Patent {
 
     public void setPatentType(String patentType) {
         this.patentType = patentType;
+    }
+
+    public LocalDate getGrantDate() {
+        return grantDate;
+    }
+
+    public void setGrantDate(LocalDate grantDate) {
+        this.grantDate = grantDate;
+    }
+
+    public String getStatus() {
+        return status;
+    }
+
+    public void setStatus(String status) {
+        this.status = status;
     }
 }

@@ -17,6 +17,26 @@
         button { padding: 6px 12px; border: 1px solid #ccc; border-radius: 4px; background: #fff; cursor: pointer; }
         button:hover { background: #f0f0f0; }
         #search-input { padding: 6px 10px; width: 220px; border: 1px solid #ccc; border-radius: 4px; }
+
+        /* 画像弹窗样式 */
+        #profile-modal {
+            display: none; position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%);
+            width: 600px; background: #fff; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px;
+            z-index: 1000; padding: 20px;
+        }
+        #modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.3); z-index: 999; }
+        .modal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px; border-bottom: 1px solid #eee; padding-bottom: 10px; }
+        .close-btn { cursor: pointer; font-size: 20px; color: #999; }
+        #trend-chart { width: 100%; height: 250px; margin-top: 15px; }
+
+        /* 机构分析面板 */
+        #analysis-panel {
+            position: fixed; right: 0; top: 50px; width: 350px; height: calc(100vh - 50px);
+            background: #fff; box-shadow: -2px 0 8px rgba(0,0,0,0.1); padding: 20px;
+            transform: translateX(100%); transition: transform 0.3s ease;
+        }
+        #analysis-panel.open { transform: translateX(0); }
+        #radar-chart { width: 100%; height: 300px; }
     </style>
 </head>
 <body>
@@ -25,12 +45,45 @@
     <div class="ctrl-group">
         <input id="search-input" placeholder="搜索节点名称" />
         <button id="search-btn">搜索定位</button>
+        <button id="export-btn" style="background: #e6f7ff; border-color: #91d5ff;">导出 Excel</button>
+        <button id="analysis-toggle" style="background: #f6ffed; border-color: #b7eb8f;">机构分析</button>
         <button id="zoomIn">放大</button>
         <button id="zoomOut">缩小</button>
         <button id="resetView">重置视图</button>
     </div>
 </div>
 <div id="graph-container"></div>
+
+<!-- 画像弹窗 -->
+<div id="modal-overlay"></div>
+<div id="profile-modal">
+    <div class="modal-header">
+        <h3 id="modal-title">科研人员画像</h3>
+        <span class="close-btn" onclick="closeModal()">&times;</span>
+    </div>
+    <div id="modal-content">
+        <p><strong>所属机构：</strong><span id="p-inst"></span></p>
+        <p><strong>职称：</strong><span id="p-title"></span></p>
+        <p><strong>研究方向：</strong><span id="p-field"></span></p>
+        <p><strong>学术影响力指数：</strong><span id="p-index" style="color: #ee6666; font-weight: bold;"></span></p>
+        <p><strong>累计项目经费：</strong><span id="p-fund"></span> 万元</p>
+    </div>
+    <div id="trend-chart"></div>
+    <div style="margin-top: 15px; border-top: 1px solid #eee; padding-top: 10px;">
+        <h4 style="font-size: 14px; color: #333;">研究主题演变轨迹：</h4>
+        <div id="topic-chart" style="width: 100%; height: 180px;"></div>
+    </div>
+</div>
+
+<!-- 机构分析侧边栏 -->
+<div id="analysis-panel">
+    <h3 style="margin-bottom: 20px;">机构竞争力对标</h3>
+    <select id="inst-select" style="width: 100%; padding: 8px; margin-bottom: 15px;">
+        <option value="1">选择对标机构...</option>
+    </select>
+    <div id="radar-chart"></div>
+    <div id="analysis-summary" style="margin-top: 20px; font-size: 14px; color: #666;"></div>
+</div>
 
 <script>
     const chartDom = document.getElementById('graph-container');
@@ -126,6 +179,92 @@
         }
     });
 
+    // ============================
+    // ✅ 单击显示画像弹窗
+    // ============================
+    myChart.on('click', async (params) => {
+        if (params.dataType !== 'node' || !params.data.props?.title) return; // 仅科研人员有 title
+        
+        const id = params.data.id;
+        try {
+            const res = await fetch(`/portrait/api/researcher/profile/${id}`);
+            const data = await res.json();
+            if (!data.basicInfo) return;
+
+            const r = data.basicInfo;
+            document.getElementById('modal-title').innerText = `${r.name} - 科研画像`;
+            document.getElementById('p-inst').innerText = r.institution?.instName || '-';
+            document.getElementById('p-title').innerText = r.title || '-';
+            document.getElementById('p-field').innerText = r.researchField || '-';
+            document.getElementById('p-index').innerText = r.influenceIndex ? r.influenceIndex.toFixed(2) : '待计算';
+            document.getElementById('p-fund').innerText = data.totalFunding ? data.totalFunding.toFixed(1) : '0.0';
+
+            // 渲染趋势图
+            renderTrendChart(data.trends);
+            
+            // 渲染主题演变图
+            renderTopicEvolution(data.topicEvolution);
+            
+            document.getElementById('profile-modal').style.display = 'block';
+            document.getElementById('modal-overlay').style.display = 'block';
+        } catch (e) { console.error('获取画像失败', e); }
+    });
+
+    function closeModal() {
+        document.getElementById('profile-modal').style.display = 'none';
+        document.getElementById('modal-overlay').style.display = 'none';
+    }
+    document.getElementById('modal-overlay').onclick = closeModal;
+
+    // ============================
+    // ✅ 机构分析面板控制
+    // ============================
+    const analysisPanel = document.getElementById('analysis-panel');
+    let radarChart = null;
+
+    document.getElementById('analysis-toggle').onclick = () => {
+        analysisPanel.classList.toggle('open');
+        if (analysisPanel.classList.contains('open') && !radarChart) {
+            loadInstitutions();
+        }
+    };
+
+    async function loadInstitutions() {
+        // 模拟加载机构列表，实际应从 API 获取
+        const select = document.getElementById('inst-select');
+        select.innerHTML = '<option value="1">本校 (默认)</option><option value="2">对标大学 A</option>';
+        select.onchange = () => loadRadarData(select.value);
+        loadRadarData(1);
+    }
+
+    async function loadRadarData(id) {
+        try {
+            const res = await fetch(`/portrait/api/institution/radar/${id}`);
+            const data = await res.json();
+            if (!data.dimensions) return;
+
+            const indicators = Object.keys(data.dimensions).map(k => ({ name: k, max: 100 }));
+            const values = Object.values(data.dimensions);
+
+            if (!radarChart) radarChart = echarts.init(document.getElementById('radar-chart'));
+            
+            radarChart.setOption({
+                title: { text: data.institutionName || '竞争力模型', left: 'center', textStyle: { fontSize: 14 } },
+                tooltip: {},
+                radar: { indicator: indicators, radius: '65%' },
+                series: [{
+                    type: 'radar',
+                    data: [{ value: values, name: '综合得分', areaStyle: { color: 'rgba(84, 112, 198, 0.3)' } }]
+                }]
+            });
+
+            document.getElementById('analysis-summary').innerHTML = `
+                <strong>优势领域：</strong>${Object.keys(data.dimensions).reduce((a, b) => data.dimensions[a] > data.dimensions[b] ? a : b)}<br/>
+                <strong>建议关注：</strong>科研效率与国际合作维度仍有提升空间。
+            `;
+        } catch (e) { console.error('加载雷达图失败', e); }
+    }
+
     // 搜索定位
     function searchAndLocate(keyword) {
         if (!keyword.trim()) return alert('请输入关键词');
@@ -151,6 +290,12 @@
     window.addEventListener('resize', () => myChart.resize());
     document.getElementById('search-btn').onclick = () => searchAndLocate(document.getElementById('search-input').value);
     document.getElementById('search-input').onkeydown = e => e.key === 'Enter' && searchAndLocate(e.target.value);
+    
+    // 导出功能
+    document.getElementById('export-btn').onclick = () => {
+        window.open('/portrait/api/researcher/export', '_blank');
+    };
+
     document.getElementById('zoomIn').onclick = () => myChart.dispatchAction({ type: 'dataZoom', delta: 10 });
     document.getElementById('zoomOut').onclick = () => myChart.dispatchAction({ type: 'dataZoom', delta: -10 });
     document.getElementById('resetView').onclick = () => {
@@ -167,6 +312,83 @@
         const links = allLinks.filter(l => ids.has(l.source) && ids.has(l.target));
         renderGraph(nodes, links);
     });
+
+    // ============================
+    // ✅ 渲染产出趋势图
+    // ============================
+    function renderTrendChart(trends) {
+        const trendDom = document.getElementById('trend-chart');
+        const trendChart = echarts.init(trendDom);
+        
+        if (!trends || !trends.papers) return;
+
+        // 提取所有年份并排序
+        const years = new Set([...Object.keys(trends.papers), ...Object.keys(trends.patents)]);
+        const sortedYears = Array.from(years).sort();
+
+        const option = {
+            title: { text: '年度科研产出趋势', left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis' },
+            legend: { data: ['论文', '专利'], bottom: 0 },
+            xAxis: { type: 'category', data: sortedYears },
+            yAxis: { type: 'value' },
+            series: [
+                {
+                    name: '论文', type: 'line', smooth: true,
+                    data: sortedYears.map(y => trends.papers[y] || 0),
+                    itemStyle: { color: '#5470c6' }
+                },
+                {
+                    name: '专利', type: 'bar',
+                    data: sortedYears.map(y => trends.patents[y] || 0),
+                    itemStyle: { color: '#91cc75' }
+                }
+            ]
+        };
+        trendChart.setOption(option);
+    }
+
+    // ============================
+    // ✅ 渲染主题演变图 (基于 Graph)
+    // ============================
+    function renderTopicEvolution(evolution) {
+        const topicDom = document.getElementById('topic-chart');
+        const topicChart = echarts.init(topicDom);
+        
+        if (!evolution) return;
+
+        const nodes = [];
+        const links = [];
+        let prevKeywords = [];
+
+        Object.keys(evolution).sort().forEach(year => {
+            const keywords = evolution[year].slice(0, 3); // 每年取前3个关键词
+            keywords.forEach(kw => {
+                nodes.push({ name: `${year}\n${kw}`, symbolSize: 20, category: year });
+            });
+            
+            // 建立年份间的关键词关联
+            if (prevKeywords.length > 0) {
+                links.push({ source: `${parseInt(year)-1}\n${prevKeywords[0]}`, target: `${year}\n${keywords[0]}` });
+            }
+            prevKeywords = keywords;
+        });
+
+        const option = {
+            tooltip: {},
+            animationDurationUpdate: 1500,
+            series: [{
+                type: 'graph',
+                layout: 'force',
+                symbolSize: 30,
+                force: { repulsion: 100, edgeLength: 50 },
+                data: nodes,
+                links: links,
+                lineStyle: { color: 'source', curveness: 0.3 }
+            }]
+        };
+        topicChart.setOption(option);
+    }
 </script>
 </body>
 </html>
