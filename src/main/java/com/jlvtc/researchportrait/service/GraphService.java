@@ -108,6 +108,59 @@ public class GraphService {
     }
 
     // ============================
+    // 科研合作网络深度分析
+    // ============================
+    public Map<String, Object> getCooperationAnalysis(Long researcherId) {
+        Map<String, Object> result = new HashMap<>();
+        try (Session session = driver.session()) {
+            // 1. 核心合作者 (Top 5)
+            String topCollabQuery = "MATCH (r:Researcher {id: $rid})-[:WRITE|INVENT|PARTICIPATE|CHARGE]-(o)-[:WRITE|INVENT|PARTICIPATE|CHARGE]-(c:Researcher) " +
+                    "WHERE r <> c RETURN c, count(o) as freq ORDER BY freq DESC LIMIT 5";
+            Result topRes = session.run(topCollabQuery, Map.of("rid", researcherId));
+            List<Map<String, Object>> topCollaborators = new ArrayList<>();
+            while (topRes.hasNext()) {
+                Record rec = topRes.next();
+                Node c = rec.get("c").asNode();
+                Map<String, Object> collab = new HashMap<>(c.asMap());
+                collab.put("frequency", rec.get("freq").asInt());
+                topCollaborators.add(collab);
+            }
+            result.put("topCollaborators", topCollaborators);
+
+            // 2. 跨学科合作度
+            String disciplineQuery = "MATCH (r:Researcher {id: $rid})-[:WRITE|INVENT|PARTICIPATE|CHARGE]-(o)-[:WRITE|INVENT|PARTICIPATE|CHARGE]-(c:Researcher) " +
+                    "WHERE r <> c AND r.disciplineCategory <> c.disciplineCategory " +
+                    "RETURN c.disciplineCategory as discipline, count(c) as count";
+            Result discRes = session.run(disciplineQuery, Map.of("rid", researcherId));
+            Map<String, Integer> crossDiscipline = new HashMap<>();
+            int totalCross = 0;
+            while (discRes.hasNext()) {
+                Record rec = discRes.next();
+                String disc = rec.get("discipline").asString();
+                int count = rec.get("count").asInt();
+                crossDiscipline.put(disc, count);
+                totalCross += count;
+            }
+            result.put("crossDisciplineStats", crossDiscipline);
+            result.put("totalCrossDisciplineCount", totalCross);
+
+            // 3. 合作稳定性 (基于年份)
+            String stabilityQuery = "MATCH (r:Researcher {id: $rid})-[:WRITE|INVENT|PARTICIPATE|CHARGE]-(o) " +
+                    "WHERE o.pubDate IS NOT NULL OR o.applyDate IS NOT NULL OR o.startDate IS NOT NULL " +
+                    "WITH coalesce(o.pubDate, o.applyDate, o.startDate) as year, count(o) as cnt " +
+                    "RETURN year.year as y, cnt ORDER BY y";
+            Result stabRes = session.run(stabilityQuery, Map.of("rid", researcherId));
+            Map<Integer, Integer> yearlyCollab = new LinkedHashMap<>();
+            while (stabRes.hasNext()) {
+                Record rec = stabRes.next();
+                yearlyCollab.put(rec.get("y").asInt(), rec.get("cnt").asInt());
+            }
+            result.put("yearlyCollaborationTrend", yearlyCollab);
+        }
+        return result;
+    }
+
+    // ============================
     // 工具方法：Node 转 Map（无任何编译错误）
     // ============================
     private Map<String, Object> nodeToMap(Node node, long nid) {

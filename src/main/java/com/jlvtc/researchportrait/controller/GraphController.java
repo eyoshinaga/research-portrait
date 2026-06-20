@@ -8,6 +8,8 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
 
+import java.util.Map;
+
 @RestController
 @RequestMapping("/api/graph")
 @RequiredArgsConstructor
@@ -25,5 +27,11 @@ public class GraphController {
     @GetMapping("/expand/{nodeId}")
     public GraphResult expand(@PathVariable long nodeId) {
         return graphService.expandNeighbors(nodeId);
+    }
+
+    // 获取科研合作网络深度分析数据
+    @GetMapping("/cooperation/{id}")
+    public Map<String, Object> getCooperationAnalysis(@PathVariable Long id) {
+        return graphService.getCooperationAnalysis(id);
     }
 }

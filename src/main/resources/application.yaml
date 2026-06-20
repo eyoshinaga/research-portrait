@@ -20,3 +20,9 @@ mybatis:
   configuration:
     map-underscore-to-camel-case: true
   mapper-locations: classpath:mapper/*.xml
+
+logging:
+  level:
+    # Spring Data Neo4j が内部生成する Cypher クエリで非推奨の id() 関数を使用する警告を抑制
+    # （フレームワーク内部の問題であり、アプリケーション側では対処不可。id() は Neo4j 5.x で非推奨だが正常動作する）
+    org.springframework.data.neo4j.cypher.deprecation: ERROR
