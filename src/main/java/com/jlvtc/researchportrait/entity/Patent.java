@@ -29,6 +29,14 @@ public class Patent {
     @Property("status")
     private String status;
 
+    /** 是否实现成果转化 */
+    @Property("transferred")
+    private Boolean transferred;
+
+    /** 成果转化金额（万元） */
+    @Property("transferAmount")
+    private Double transferAmount;
+
     public Patent() {}
 
     // getter & setter
@@ -86,5 +94,21 @@ public class Patent {
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public Boolean getTransferred() {
+        return transferred;
+    }
+
+    public void setTransferred(Boolean transferred) {
+        this.transferred = transferred;
+    }
+
+    public Double getTransferAmount() {
+        return transferAmount;
+    }
+
+    public void setTransferAmount(Double transferAmount) {
+        this.transferAmount = transferAmount;
     }
 }

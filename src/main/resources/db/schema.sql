@@ -37,6 +37,7 @@ CREATE TABLE `paper` (
     `cited_num` INT DEFAULT 0 COMMENT '被引次数',
     `subject_field` VARCHAR(255) COMMENT '学科领域',
     `impact_factor` DECIMAL(5, 2) COMMENT '影响因子',
+    `international` TINYINT(1) DEFAULT 0 COMMENT '是否国际合作论文（1是/0否）',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -59,6 +60,8 @@ CREATE TABLE `patent` (
     `grant_date` DATE COMMENT '授权日期',
     `type` VARCHAR(50) COMMENT '专利类型（发明/实用新型/外观）',
     `status` VARCHAR(50) COMMENT '法律状态',
+    `transferred` TINYINT(1) DEFAULT 0 COMMENT '是否实现成果转化（1是/0否）',
+    `transfer_amount` DECIMAL(10, 2) DEFAULT 0.00 COMMENT '成果转化金额（万元）',
     `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -102,4 +105,13 @@ CREATE TABLE `weight_config` (
     `patent_weight` DECIMAL(3, 2) DEFAULT 0.3 COMMENT '专利权重',
     `project_weight` DECIMAL(3, 2) DEFAULT 0.3 COMMENT '项目权重',
     `decay_rate` DECIMAL(3, 2) DEFAULT 0.05 COMMENT '时间衰减系数 lambda'
+);
+
+-- 10. 论文引用关联表 (Paper_Citation) - 记录论文之间的引用关系（对应 Neo4j 中的 CITES 有向边）
+CREATE TABLE `paper_citation` (
+    `citing_paper_id` BIGINT COMMENT '引用方论文ID',
+    `cited_paper_id` BIGINT COMMENT '被引用论文ID',
+    PRIMARY KEY (`citing_paper_id`, `cited_paper_id`),
+    FOREIGN KEY (`citing_paper_id`) REFERENCES `paper`(`id`),
+    FOREIGN KEY (`cited_paper_id`) REFERENCES `paper`(`id`)
 );

@@ -15,9 +15,12 @@ import java.util.stream.Collectors;
 import java.time.LocalDate;
 import java.time.Period;
 
+import lombok.extern.slf4j.Slf4j;
+
 /**
  * 科研人员 业务层
  */
+@Slf4j
 @Service
 public class ResearcherService {
 
@@ -104,7 +107,112 @@ public class ResearcherService {
             ));
         detail.put("topicEvolution", topicEvolution);
         
+        // 4. 智能标签体系（多源成果数据融合自动生成）
+        detail.put("intelligentTags", buildIntelligentTags(r));
+        
+        // 5. 项目层级分布（负责 + 参与的所有项目按层级分组）
+        Map<String, Long> levelDist = new LinkedHashMap<>();
+        for (String level : new String[]{"国家级", "省部级", "横向"}) {
+            long cnt = r.getChargeProjects().stream()
+                    .filter(p -> level.equals(p.getProjLevel())).count()
+                    + r.getJoinProjects().stream()
+                    .filter(p -> level.equals(p.getProjLevel())).count();
+            levelDist.put(level, cnt);
+        }
+        detail.put("projectLevelDistribution", levelDist);
+        
         return detail;
+    }
+
+    /**
+     * 构建智能标签体系：基于项目、论文、专利等多源数据自动推理
+     * 覆盖研究方向、学术影响力、科研产出、项目层级、合作交流五个维度
+     */
+    public List<Map<String, Object>> buildIntelligentTags(Researcher r) {
+        List<Map<String, Object>> tags = new ArrayList<>();
+        List<Paper> papers = r.getPapers();
+        List<Patent> patents = r.getPatents();
+
+        // 1. 研究方向维度
+        if (r.getDisciplineCategory() != null) {
+            tags.add(tag(r.getDisciplineCategory() + "学者", "研究方向"));
+        }
+        if (r.getResearchField() != null) {
+            tags.add(tag("核心方向：" + r.getResearchField(), "研究方向"));
+        }
+
+        // 2. 学术影响力维度
+        double influence = r.getInfluenceIndex() != null ? r.getInfluenceIndex() : 0;
+        if (influence >= 85) {
+            tags.add(tag("高影响力学者", "学术影响力"));
+        } else if (influence >= 65) {
+            tags.add(tag("中坚学者", "学术影响力"));
+        } else if (influence >= 45) {
+            tags.add(tag("潜力学者", "学术影响力"));
+        }
+
+        // 3. 科研产出维度（论文被引 / 发明专利 / 成果转化 / 国际合作）
+        int totalCited = papers.stream()
+                .filter(p -> p.getCitedNum() != null).mapToInt(Paper::getCitedNum).sum();
+        if (totalCited >= 300) {
+            tags.add(tag("高被引学者（累计被引 " + totalCited + " 次）", "科研产出"));
+        }
+        long inventionCount = patents.stream()
+                .filter(p -> "发明专利".equals(p.getPatentType())).count();
+        if (inventionCount >= 5) {
+            tags.add(tag("发明专利达人（" + inventionCount + " 项）", "科研产出"));
+        }
+        long transferredCount = patents.stream()
+                .filter(p -> Boolean.TRUE.equals(p.getTransferred())).count();
+        if (transferredCount >= 1) {
+            tags.add(tag("成果转化先锋（" + transferredCount + " 项）", "科研产出"));
+        }
+        long intlCount = papers.stream()
+                .filter(p -> Boolean.TRUE.equals(p.getInternational())).count();
+        if (intlCount >= 1) {
+            tags.add(tag("国际合著（" + intlCount + " 篇）", "科研产出"));
+        }
+
+        // 4. 项目层级维度
+        long nationalCharge = r.getChargeProjects().stream()
+                .filter(p -> "国家级".equals(p.getProjLevel())).count();
+        if (nationalCharge >= 1) {
+            tags.add(tag("国家级项目负责人（" + nationalCharge + " 项）", "项目层级"));
+        }
+        if (r.getChargeProjects().size() >= 3) {
+            tags.add(tag("项目攻关骨干", "项目层级"));
+        }
+
+        // 5. 合作交流维度（基于合作网络中推导的合作者规模）
+        long cooperatorCount = countCooperators(r.getId());
+        if (cooperatorCount >= 8) {
+            tags.add(tag("合作网络活跃（" + cooperatorCount + " 位合作者）", "合作交流"));
+        }
+
+        return tags;
+    }
+
+    /** 构造单个标签项 */
+    private Map<String, Object> tag(String name, String category) {
+        Map<String, Object> t = new LinkedHashMap<>();
+        t.put("name", name);
+        t.put("category", category);
+        return t;
+    }
+
+    /** 统计合作者数量（COOPERATE_WITH 无向关系） */
+    private long countCooperators(Long researcherId) {
+        try (Session session = driver.session()) {
+            Result result = session.run(
+                "MATCH (r:Researcher {id: $rid})-[:COOPERATE_WITH]-(c:Researcher) RETURN count(c) AS cnt",
+                Map.of("rid", researcherId));
+            if (result.hasNext()) {
+                return result.next().get("cnt").asLong();
+            }
+        } catch (Exception e) {
+            log.warn("统计合作者数量失败: {}", e.getMessage());
+        }
+        return 0;
     }
 
     /**
@@ -203,22 +311,179 @@ public class ResearcherService {
     }
 
     /**
+     * 导出所有科研人员基础信息（轻量级 Cypher 查询，不加载关联关系）
+     * 仅查询导出 Excel 所需的 5 个字段，避免 findAll() 导致 OOM
+     */
+    public List<Map<String, Object>> exportAllSimple() {
+        List<Map<String, Object>> results = new ArrayList<>();
+        try (Session session = driver.session()) {
+            Result result = session.run(
+                "MATCH (r:Researcher) RETURN r.name AS name, r.title AS title, " +
+                "r.department AS department, r.researchField AS researchField, " +
+                "r.influenceIndex AS influenceIndex ORDER BY r.influenceIndex DESC"
+            );
+            while (result.hasNext()) {
+                Record rec = result.next();
+                Map<String, Object> map = new LinkedHashMap<>();
+                map.put("姓名", rec.get("name").isNull() ? null : rec.get("name").asString());
+                map.put("职称", rec.get("title").isNull() ? null : rec.get("title").asString());
+                map.put("所属院系", rec.get("department").isNull() ? null : rec.get("department").asString());
+                map.put("研究方向", rec.get("researchField").isNull() ? null : rec.get("researchField").asString());
+                map.put("影响力指数", rec.get("influenceIndex").isNull() ? null : rec.get("influenceIndex").asDouble());
+                results.add(map);
+            }
+        }
+        return results;
+    }
+
+    /**
      * 全量刷新所有科研人员的影响力指数（定时任务与手动触发共用）
+     * 不使用 @Transactional，改用纯 Cypher 读写，避免事务缓存导致 OOM
      * @return 已刷新的人员数
      */
-    @Transactional("transactionManager")
     public int refreshAllInfluenceIndex() {
-        List<Researcher> all = findAll();
-        int count = 0;
-        for (Researcher r : all) {
-            double newIndex = influenceCalculatorService.calculateInfluenceIndex(
-                r, r.getPapers(), r.getPatents(), r.getChargeProjects()
+        // 轻量级查询获取所有科研人员 Neo4j 内部 ID
+        List<Long> allIds = new ArrayList<>();
+        try (Session session = driver.session()) {
+            Result result = session.run("MATCH (r:Researcher) RETURN id(r) AS rid");
+            while (result.hasNext()) {
+                allIds.add(result.next().get("rid").asLong());
+            }
+        }
+        log.info("[影响力刷新] 共查询到 {} 名科研人员，开始分批处理", allIds.size());
+        return processInfluenceBatch(allIds);
+    }
+
+    /**
+     * 按院系刷新影响力指数（仅处理所选院系的科研人员）
+     * @param instIds 机构 ID 列表
+     * @return 已刷新的人员数
+     */
+    public int refreshInfluenceByInstitutions(List<Long> instIds) {
+        List<Long> researcherIds = new ArrayList<>();
+        try (Session session = driver.session()) {
+            Result result = session.run(
+                "UNWIND $instIds AS instId " +
+                "MATCH (r:Researcher)-[:BELONG_TO]->(i:Institution {id: instId}) " +
+                "RETURN id(r) AS rid",
+                Map.of("instIds", instIds)
             );
-            r.setInfluenceIndex(newIndex);
-            researcherRepository.save(r);
-            count++;
+            while (result.hasNext()) {
+                researcherIds.add(result.next().get("rid").asLong());
+            }
+        }
+        log.info("[影响力刷新] 所选院系关联 {} 名科研人员，开始分批处理", researcherIds.size());
+        return processInfluenceBatch(researcherIds);
+    }
+
+    /**
+     * 分批处理影响力计算（纯 Cypher，不依赖 Spring Data 事务缓存）
+     * 权重与衰减系数统一从 WeightConfig（动态权重配置）读取，管理员调整后即时生效
+     */
+    private int processInfluenceBatch(List<Long> allIds) {
+        int batchSize = 50;
+        int count = 0;
+        // 缓存各学科权重配置，避免逐人重复查询数据库
+        Map<String, WeightConfig> configCache = new HashMap<>();
+        for (int i = 0; i < allIds.size(); i += batchSize) {
+            List<Long> batchIds = allIds.subList(i, Math.min(i + batchSize, allIds.size()));
+            for (Long rid : batchIds) {
+                try (Session session = driver.session()) {
+                    // 单独加载一个科研人员及其关联数据
+                    Result rResult = session.run(
+                        "MATCH (r) WHERE id(r) = $rid " +
+                        "OPTIONAL MATCH (r)-[:WRITE]->(p:Paper) " +
+                        "OPTIONAL MATCH (r)-[:INVENT]->(pat:Patent) " +
+                        "OPTIONAL MATCH (r)-[:`CHARGE`]->(proj:Project) " +
+                        "RETURN r, collect(DISTINCT p) AS papers, collect(DISTINCT pat) AS patents, collect(DISTINCT proj) AS projects",
+                        Map.of("rid", rid)
+                    );
+                    if (!rResult.hasNext()) continue;
+                    Record rec = rResult.next();
+                    org.neo4j.driver.types.Node rNode = rec.get("r").asNode();
+
+                    // 学科权重配置：数据库动态配置优先（未配置时使用默认模板）
+                    double totalScore = 0.0;
+                    String discipline = rNode.containsKey("disciplineCategory") && !rNode.get("disciplineCategory").isNull()
+                        ? rNode.get("disciplineCategory").asString() : null;
+                    WeightConfig config = resolveCachedConfig(discipline, configCache);
+                    double lambda = config.getDecayRate() != null ? config.getDecayRate() : 0.05;
+
+                    // 论文得分（按发表时间衰减）
+                    List<org.neo4j.driver.types.Node> papers = rec.get("papers").asList(v -> v.asNode());
+                    for (org.neo4j.driver.types.Node p : papers) {
+                        double cited = p.containsKey("citedNum") && !p.get("citedNum").isNull() ? p.get("citedNum").asDouble() : 0;
+                        double if_ = p.containsKey("impactFactor") && !p.get("impactFactor").isNull() ? p.get("impactFactor").asDouble() : 0;
+                        double baseScore = cited * 0.5 + if_ * 2.0;
+                        double decay = computeDecay(p, "pubDate", lambda);
+                        totalScore += baseScore * decay * config.getPaperWeight();
+                    }
+
+                    // 专利得分（按授权时间衰减）
+                    List<org.neo4j.driver.types.Node> patents = rec.get("patents").asList(v -> v.asNode());
+                    for (org.neo4j.driver.types.Node pt : patents) {
+                        String patentType = pt.containsKey("patentType") && !pt.get("patentType").isNull()
+                            ? pt.get("patentType").asString() : "";
+                        double baseScore = "发明专利".equals(patentType) ? 10.0 : 5.0;
+                        double decay = computeDecay(pt, "grantDate", lambda);
+                        totalScore += baseScore * decay * config.getPatentWeight();
+                    }
+
+                    // 项目得分（按结题时间衰减，无结题时间时回退到开始日期）
+                    List<org.neo4j.driver.types.Node> projects = rec.get("projects").asList(v -> v.asNode());
+                    for (org.neo4j.driver.types.Node pr : projects) {
+                        double fund = pr.containsKey("fund") && !pr.get("fund").isNull() ? pr.get("fund").asDouble() : 0;
+                        double baseScore = fund * 0.1;
+                        String projLevel = pr.containsKey("projLevel") && !pr.get("projLevel").isNull()
+                            ? pr.get("projLevel").asString() : "";
+                        if ("国家级".equals(projLevel)) baseScore *= 1.5;
+                        double decay = computeDecay(pr, "endDate", lambda, "startDate");
+                        totalScore += baseScore * decay * config.getProjectWeight();
+                    }
+
+                    double newIndex = Math.round(totalScore * 100.0) / 100.0;
+                    session.run("MATCH (r) WHERE id(r) = $rid SET r.influenceIndex = $idx",
+                        Map.of("rid", rid, "idx", newIndex));
+                    count++;
+                }
+            }
+            log.info("[影响力刷新] 进度 {}/{}", Math.min(i + batchSize, allIds.size()), allIds.size());
         }
         return count;
+    }
+
+    /** 解析并对学科权重配置做缓存（批量刷新时避免重复查询） */
+    private WeightConfig resolveCachedConfig(String discipline, Map<String, WeightConfig> cache) {
+        String key = discipline == null ? "" : discipline;
+        if (!cache.containsKey(key)) {
+            cache.put(key, influenceCalculatorService.resolveWeightConfig(discipline));
+        }
+        return cache.get(key);
+    }
+
+    /** 时间衰减函数: W(t) = e^(-lambda * years)，未来时间按当前年处理 */
+    private double computeDecay(org.neo4j.driver.types.Node node, String dateField, double lambda) {
+        return computeDecay(node, dateField, lambda, null);
+    }
+
+    /** 时间衰减函数（带备用日期字段）：主字段缺失时回退到备用字段 */
+    private double computeDecay(org.neo4j.driver.types.Node node, String dateField, double lambda, String fallbackField) {
+        LocalDate date = readDate(node, dateField);
+        if (date == null && fallbackField != null) date = readDate(node, fallbackField);
+        if (date == null) return 1.0;
+        int years = Period.between(date, LocalDate.now()).getYears();
+        if (years < 0) years = 0;
+        return Math.exp(-lambda * years);
+    }
+
+    /** 安全读取节点日期字段 */
+    private LocalDate readDate(org.neo4j.driver.types.Node node, String field) {
+        if (!node.containsKey(field) || node.get(field).isNull()) return null;
+        try {
+            return node.get(field).asLocalDate();
+        } catch (Exception e) {
+            return null;
+        }
     }
 
     /**
@@ -249,8 +514,29 @@ public class ResearcherService {
         sb.append("| 隶属机构 | ").append(r.getInstitution() != null ? (r.getInstitution().getInstName() != null ? r.getInstitution().getInstName() : r.getInstitution().getName()) : "-").append(" |\n");
         sb.append("| 影响力指数 | ").append(r.getInfluenceIndex() != null ? String.format("%.2f", r.getInfluenceIndex()) : "待计算").append(" |\n\n");
 
-        // 二、科研产出统计
-        sb.append("## 二、科研产出统计\n\n");
+        // 二、智能标签体系
+        sb.append("## 二、智能标签体系\n\n");
+        sb.append("> 基于科研项目、学术论文、授权专利等多源成果数据自动分析生成\n\n");
+        @SuppressWarnings("unchecked")
+        List<Map<String, Object>> tags = (List<Map<String, Object>>) profile.get("intelligentTags");
+        if (tags != null && !tags.isEmpty()) {
+            sb.append("| 标签类别 | 标签内容 |\n");
+            sb.append("|:---|:---|\n");
+            Map<String, List<String>> groupedTags = new LinkedHashMap<>();
+            for (Map<String, Object> t : tags) {
+                String cat = String.valueOf(t.get("category"));
+                groupedTags.computeIfAbsent(cat, k -> new ArrayList<>()).add(String.valueOf(t.get("name")));
+            }
+            for (Map.Entry<String, List<String>> e : groupedTags.entrySet()) {
+                sb.append("| ").append(e.getKey()).append(" | ").append(String.join("；", e.getValue())).append(" |\n");
+            }
+        } else {
+            sb.append("暂无足够数据生成智能标签\n");
+        }
+        sb.append("\n");
+
+        // 三、科研产出统计
+        sb.append("## 三、科研产出统计\n\n");
         int paperCount = r.getPapers().size();
         int patentCount = r.getPatents().size();
         int projectCount = r.getChargeProjects().size() + r.getJoinProjects().size();
@@ -259,8 +545,8 @@ public class ResearcherService {
         sb.append("- 参与项目: **").append(projectCount).append("** 个（其中负责 ").append(r.getChargeProjects().size()).append(" 个）\n");
         sb.append("- 累计项目经费: **").append(String.format("%.2f", profile.get("totalFunding"))).append("** 万元\n\n");
 
-        // 三、论文质量分析
-        sb.append("## 三、论文质量分析\n\n");
+        // 四、论文质量分析
+        sb.append("## 四、论文质量分析\n\n");
         int idx; // 序号计数器，在各清单中复用
         if (paperCount > 0) {
             double avgIf = r.getPapers().stream()
@@ -298,8 +584,8 @@ public class ResearcherService {
         }
         sb.append("\n");
 
-        // 四、专利分析
-        sb.append("## 四、专利分析\n\n");
+        // 五、专利分析
+        sb.append("## 五、专利分析\n\n");
         if (patentCount > 0) {
             long inventionCount = r.getPatents().stream()
                 .filter(p -> "发明专利".equals(p.getPatentType())).count();
@@ -324,14 +610,26 @@ public class ResearcherService {
         }
         sb.append("\n");
 
-        // 五、项目分析
-        sb.append("## 五、科研项目分析\n\n");
+        // 六、项目分析
+        sb.append("## 六、科研项目分析\n\n");
         if (!r.getChargeProjects().isEmpty() || !r.getJoinProjects().isEmpty()) {
             long nationalCount = r.getChargeProjects().stream()
                 .filter(p -> "国家级".equals(p.getProjLevel())).count();
             sb.append("- 负责项目: **").append(r.getChargeProjects().size()).append("** 个\n");
             sb.append("- 参与项目: **").append(r.getJoinProjects().size()).append("** 个\n");
             sb.append("- 国家级项目: **").append(nationalCount).append("** 个\n\n");
+            // 项目层级分布
+            @SuppressWarnings("unchecked")
+            Map<String, Long> levelDist = (Map<String, Long>) profile.get("projectLevelDistribution");
+            if (levelDist != null && !levelDist.isEmpty()) {
+                sb.append("**项目层级分布**：\n\n");
+                sb.append("| 项目层级 | 数量 |\n");
+                sb.append("|:---|:---|\n");
+                for (Map.Entry<String, Long> e : levelDist.entrySet()) {
+                    sb.append("| ").append(e.getKey()).append(" | ").append(e.getValue()).append(" |\n");
+                }
+                sb.append("\n");
+            }
             sb.append("### 项目清单\n\n");
             sb.append("| 序号 | 项目名称 | 级别 | 经费(万元) | 状态 | 角色 |\n");
             sb.append("|:---|:---|:---|:---|:---|:---|\n");
@@ -355,8 +653,8 @@ public class ResearcherService {
         }
         sb.append("\n");
 
-        // 六、产出趋势分析
-        sb.append("## 六、产出趋势分析\n\n");
+        // 七、产出趋势分析
+        sb.append("## 七、产出趋势分析\n\n");
         @SuppressWarnings("unchecked")
         Map<String, Object> trends = (Map<String, Object>) profile.get("trends");
         if (trends != null) {
@@ -377,8 +675,8 @@ public class ResearcherService {
         }
         sb.append("\n");
 
-        // 七、综合评价
-        sb.append("## 七、综合评价\n\n");
+        // 八、综合评价
+        sb.append("## 八、综合评价\n\n");
         double influence = r.getInfluenceIndex() != null ? r.getInfluenceIndex() : 0;
         String level;
         if (influence >= 80) {

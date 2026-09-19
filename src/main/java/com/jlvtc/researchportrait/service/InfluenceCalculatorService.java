@@ -23,7 +23,7 @@ public class InfluenceCalculatorService {
     public double calculateInfluenceIndex(Researcher researcher, List<Paper> papers, 
                                           List<Patent> patents, List<Project> projects) {
         // 1. 获取学科权重配置（默认为通用配置）
-        WeightConfig config = getWeightConfig(researcher.getDisciplineCategory());
+        WeightConfig config = resolveWeightConfig(researcher.getDisciplineCategory());
         
         double totalScore = 0.0;
 
@@ -41,11 +41,12 @@ public class InfluenceCalculatorService {
             totalScore += applyDecay(baseScore, pt.getGrantDate(), config.getDecayRate()) * config.getPatentWeight();
         }
 
-        // 4. 计算项目得分
+        // 4. 计算项目得分（按结题时间衰减，无结题时间时回退到开始日期）
         for (Project pr : projects) {
             double baseScore = (pr.getFund() != null ? pr.getFund() : 0) * 0.1; // 经费贡献
             if ("国家级".equals(pr.getProjLevel())) baseScore *= 1.5; // 级别加成
-            totalScore += applyDecay(baseScore, pr.getStartDate(), config.getDecayRate()) * config.getProjectWeight();
+            LocalDate decayBase = pr.getEndDate() != null ? pr.getEndDate() : pr.getStartDate();
+            totalScore += applyDecay(baseScore, decayBase, config.getDecayRate()) * config.getProjectWeight();
         }
 
         return Math.round(totalScore * 100.0) / 100.0; // 保留两位小数
@@ -53,22 +54,29 @@ public class InfluenceCalculatorService {
 
     /**
      * 时间衰减函数: W(t) = W0 * e^(-lambda * t)
-     * t 为距今年数
+     * t 为距今年数（未来时间按当前年处理，不放大权重）
      */
     private double applyDecay(double baseScore, LocalDate date, double lambda) {
         if (date == null || lambda == 0) return baseScore;
         int years = Period.between(date, LocalDate.now()).getYears();
+        if (years < 0) years = 0;
         return baseScore * Math.exp(-lambda * years);
     }
 
     /**
      * 从数据库获取权重配置，不存在时使用默认模板
+     * （公开方法：供批量重算等其他计算路径复用，保证权重来源一致）
      */
-    private WeightConfig getWeightConfig(String discipline) {
+    public WeightConfig resolveWeightConfig(String discipline) {
         // 优先从数据库查询学科权重配置
         if (discipline != null && !discipline.isEmpty()) {
             WeightConfig dbConfig = weightConfigRepo.findByDiscipline(discipline);
             if (dbConfig != null) {
+                // 兜底：字段缺失时补默认值，保证计算不中断
+                if (dbConfig.getPaperWeight() == null) dbConfig.setPaperWeight(0.5);
+                if (dbConfig.getPatentWeight() == null) dbConfig.setPatentWeight(0.1);
+                if (dbConfig.getProjectWeight() == null) dbConfig.setProjectWeight(0.4);
+                if (dbConfig.getDecayRate() == null) dbConfig.setDecayRate(0.05);
                 log.info("使用数据库权重配置: discipline={}, paper={}, patent={}, project={}, decay={}",
                         discipline, dbConfig.getPaperWeight(), dbConfig.getPatentWeight(),
                         dbConfig.getProjectWeight(), dbConfig.getDecayRate());

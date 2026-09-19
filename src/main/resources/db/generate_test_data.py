@@ -3,6 +3,7 @@
 """
 科研人员画像分析系统 - 测试数据生成器
 校内系统: 学院/系/研究所/研究中心/重点实验室/教学部 + 500研究人员 / 500论文 / 300专利 / 300项目
+数据特征: 论文含国际合作标记、专利含成果转化标记、合作网络按研究团队聚集(10个团队)
 输出: test-data.sql (MySQL) + neo4j-test-data.cypher (Neo4j)
 """
 import random
@@ -378,9 +379,13 @@ def generate_papers():
         impact = round(random.uniform(1.5, 5.0), 1)
         subject = field
         
+        # 国际合作论文（约 18%），用于机构对标"国际合作"维度分析
+        international = random.random() < 0.18
+        
         papers.append({
             'title': title, 'journal': journal, 'doi': doi,
-            'pub_date': pub_date, 'cited': cited, 'subject': subject, 'impact': impact
+            'pub_date': pub_date, 'cited': cited, 'subject': subject,
+            'impact': impact, 'international': international
         })
     
     return papers
@@ -446,9 +451,14 @@ def generate_patents():
             if grant_year <= 2025:
                 grant_date = f'{grant_year}-{grant_month:02d}-{grant_day:02d}'
         
+        # 成果转化：约 15% 专利实现转化，转化金额 5~80 万元
+        transferred = random.random() < 0.15
+        transfer_amount = round(random.uniform(5, 80), 1) if transferred else 0.0
+        
         patents.append({
             'name': name, 'patent_no': patent_no, 'apply_date': apply_date,
-            'grant_date': grant_date, 'patent_type': patent_type, 'status': status
+            'grant_date': grant_date, 'patent_type': patent_type, 'status': status,
+            'transferred': transferred, 'transfer_amount': transfer_amount
         })
     
     return patents
@@ -533,13 +543,53 @@ def generate_projects():
     
     return projects
 
-def generate_relationships(num_researchers, num_papers, num_patents, num_projects):
-    """生成关联关系"""
+def build_research_teams(researchers):
+    """按学科将科研人员划分为研究团队（仅用于生成聚集式合作结构，不作为属性导出）。
+    划分规则：每队约 50 人，按学科人数就近取整，共 10 个团队：
+    工学 250 人→5 队、理学 125 人→2 队、医学 60 人→1 队、管理学 40 人→1 队、人文社科 25 人→1 队。
+    """
+    by_discipline = {}
+    for idx, r in enumerate(researchers, 1):
+        by_discipline.setdefault(r['discipline'], []).append(idx)
+    
+    teams = []
+    for discipline, ids in by_discipline.items():
+        num_teams = max(1, round(len(ids) / 50))
+        chunk = (len(ids) + num_teams - 1) // num_teams
+        for k in range(num_teams):
+            part = ids[k * chunk:(k + 1) * chunk]
+            if part:
+                teams.append(part)
+    return teams
+
+def sample_participants(team_of, teams, num_people, team_prob):
+    """抽取参与者：以 team_prob 概率在同一团队内抽取（形成密集的团队内合作），
+    否则在全体人员中随机抽取（形成跨团队协作边）"""
+    total = len(team_of)
+    if num_people <= 1:
+        return random.sample(range(1, total + 1), num_people)
+    if random.random() < team_prob:
+        team = random.choice(teams)
+        if len(team) >= num_people:
+            return random.sample(team, num_people)
+    return random.sample(range(1, total + 1), num_people)
+
+def generate_relationships(researchers, num_papers, num_patents, num_projects):
+    """生成关联关系。
+    参与者抽取以"研究团队"为主（论文/专利 70%、项目 85% 概率从同团队抽取），
+    使由合著/共同承担项目推导出的合作网络自然呈现团队聚集结构。"""
+    num_researchers = len(researchers)
+    teams = build_research_teams(researchers)
+    team_of = {}
+    for team in teams:
+        for r_id in team:
+            team_of[r_id] = teams.index(team)
+    
     # 论文-作者 (每篇1-4位作者)
     paper_researcher = []
     for p_id in range(1, num_papers + 1):
         num_authors = random.choices([1, 2, 3, 4], weights=[15, 50, 25, 10])[0]
-        authors = random.sample(range(1, num_researchers + 1), num_authors)
+        authors = sample_participants(team_of, teams, num_authors, 0.70)
         for order, r_id in enumerate(authors, 1):
             paper_researcher.append((p_id, r_id, order))
     
@@ -547,7 +597,7 @@ def generate_relationships(num_researchers, num_papers, num_patents, num_project
     patent_researcher = []
     for pat_id in range(1, num_patents + 1):
         num_inventors = random.choices([1, 2, 3], weights=[20, 55, 25])[0]
-        inventors = random.sample(range(1, num_researchers + 1), num_inventors)
+        inventors = sample_participants(team_of, teams, num_inventors, 0.70)
         for r_id in inventors:
             patent_researcher.append((pat_id, r_id))
     
@@ -555,7 +605,7 @@ def generate_relationships(num_researchers, num_papers, num_patents, num_project
     project_researcher = []
     for proj_id in range(1, num_projects + 1):
         num_members = random.choices([2, 3, 4, 5], weights=[20, 45, 25, 10])[0]
-        members = random.sample(range(1, num_researchers + 1), num_members)
+        members = sample_participants(team_of, teams, num_members, 0.85)
         for idx, r_id in enumerate(members):
             role = '负责人' if idx == 0 else '参与人'
             project_researcher.append((proj_id, r_id, role))
@@ -584,15 +634,54 @@ def generate_relationships(num_researchers, num_papers, num_patents, num_project
                     pair = (min(members[i], members[j]), max(members[i], members[j]))
                     cooperate_set.add(pair)
     
+    # 保证合作网络完整性：为无合作记录的人员补充少量合作边（同团队内确定性选择伙伴，
+    # 避免个别科研人员游离于合作网络之外，也不破坏团队聚集结构）
+    covered_ids = set()
+    for r1, r2 in cooperate_set:
+        covered_ids.add(r1)
+        covered_ids.add(r2)
+    isolated_ids = sorted(set(range(1, num_researchers + 1)) - covered_ids)
+    for r_id in isolated_ids:
+        team = teams[team_of[r_id]]
+        pos = team.index(r_id)
+        for offset in (1, 2):
+            partner = team[(pos + offset) % len(team)]
+            if partner != r_id:
+                cooperate_set.add((min(r_id, partner), max(r_id, partner)))
+
     cooperate_with = list(cooperate_set)
     return paper_researcher, patent_researcher, project_researcher, cooperate_with
+
+def generate_citations(papers):
+    """生成论文引用关系 (CITES)：较新论文引用较早发表的论文，同学科领域优先"""
+    citations = []
+    for i, p in enumerate(papers):
+        # 候选：发表时间早于当前论文的其它论文
+        candidates = [j for j, q in enumerate(papers)
+                      if j != i and q['pub_date'] < p['pub_date']]
+        if not candidates:
+            continue
+        # 同学科领域的候选优先，提高引用语义合理性
+        same_field = [j for j in candidates if papers[j]['subject'] == p['subject']]
+        # 每篇论文引用 0-3 篇，权重偏向 1-2 篇
+        num_refs = random.choices([0, 1, 2, 3], weights=[15, 40, 30, 15])[0]
+        if num_refs == 0:
+            continue
+        if same_field and random.random() < 0.75:
+            pool = same_field
+        else:
+            pool = candidates
+        refs = random.sample(pool, min(num_refs, len(pool)))
+        for j in refs:
+            citations.append((i + 1, j + 1))  # (引用方论文id, 被引用论文id)
+    return citations
 
 # ============================================================
 # SQL 输出
 # ============================================================
 
 def write_sql(filename, institutions, researchers, papers, patents, projects,
-              paper_researcher, patent_researcher, project_researcher):
+              paper_researcher, patent_researcher, project_researcher, citations):
     with open(filename, 'w', encoding='utf-8') as f:
         f.write("-- 科研人员画像分析系统 - 测试数据初始化脚本 (MySQL)\n")
         f.write(f"-- 数据规模：{len(institutions)}个院系/部门、{len(researchers)}个科研人员、{len(papers)}篇论文、{len(patents)}项专利、{len(projects)}个项目\n\n")
@@ -628,19 +717,21 @@ def write_sql(filename, institutions, researchers, papers, patents, projects,
         
         # 3. 论文
         f.write(f"-- 3. 插入论文数据 ({len(papers)}篇)\n")
-        f.write("INSERT INTO `paper` (`id`, `title`, `journal`, `doi`, `pub_date`, `cited_num`, `subject_field`, `impact_factor`) VALUES\n")
+        f.write("INSERT INTO `paper` (`id`, `title`, `journal`, `doi`, `pub_date`, `cited_num`, `subject_field`, `impact_factor`, `international`) VALUES\n")
         for i, p in enumerate(papers):
             end = ';\n' if i == len(papers) - 1 else ',\n'
-            f.write(f"({i+1}, '{p['title']}', '{p['journal']}', '{p['doi']}', '{p['pub_date']}', {p['cited']}, '{p['subject']}', {p['impact']}){end}")
+            intl = 1 if p['international'] else 0
+            f.write(f"({i+1}, '{p['title']}', '{p['journal']}', '{p['doi']}', '{p['pub_date']}', {p['cited']}, '{p['subject']}', {p['impact']}, {intl}){end}")
         f.write("\n")
         
         # 4. 专利
         f.write(f"-- 4. 插入专利数据 ({len(patents)}项)\n")
-        f.write("INSERT INTO `patent` (`id`, `title`, `patent_no`, `apply_date`, `grant_date`, `type`, `status`) VALUES\n")
+        f.write("INSERT INTO `patent` (`id`, `title`, `patent_no`, `apply_date`, `grant_date`, `type`, `status`, `transferred`, `transfer_amount`) VALUES\n")
         for i, pat in enumerate(patents):
             grant = f"'{pat['grant_date']}'" if pat['grant_date'] else 'NULL'
             end = ';\n' if i == len(patents) - 1 else ',\n'
-            f.write(f"({i+1}, '{pat['name']}', '{pat['patent_no']}', '{pat['apply_date']}', {grant}, '{pat['patent_type']}', '{pat['status']}'){end}")
+            xfer = 1 if pat['transferred'] else 0
+            f.write(f"({i+1}, '{pat['name']}', '{pat['patent_no']}', '{pat['apply_date']}', {grant}, '{pat['patent_type']}', '{pat['status']}', {xfer}, {pat['transfer_amount']:.1f}){end}")
         f.write("\n")
         
         # 5. 项目
@@ -684,12 +775,19 @@ def write_sql(filename, institutions, researchers, papers, patents, projects,
         f.write("(4, '医学', 0.40, 0.20, 0.40, 0.04),\n")
         f.write("(5, '管理学', 0.35, 0.25, 0.40, 0.04);\n")
 
+        # 10. 论文引用关联
+        f.write(f"\n-- 10. 插入论文引用关联 ({len(citations)}条)\n")
+        f.write("INSERT INTO `paper_citation` (`citing_paper_id`, `cited_paper_id`) VALUES\n")
+        for i, (citing_id, cited_id) in enumerate(citations):
+            end = ';\n' if i == len(citations) - 1 else ',\n'
+            f.write(f"({citing_id}, {cited_id}){end}")
+
 # ============================================================
 # Cypher 输出
 # ============================================================
 
 def write_cypher(filename, institutions, researchers, papers, patents, projects,
-                 paper_researcher, patent_researcher, project_researcher, cooperate_with):
+                 paper_researcher, patent_researcher, project_researcher, cooperate_with, citations):
     with open(filename, 'w', encoding='utf-8') as f:
         f.write("// 科研人员画像分析系统 - Neo4j 测试数据初始化脚本 (Cypher)\n")
         f.write(f"// 数据规模：{len(institutions)}院系/部门、{len(researchers)}科研人员、{len(papers)}论文、{len(patents)}专利、{len(projects)}项目\n\n")
@@ -732,9 +830,10 @@ def write_cypher(filename, institutions, researchers, papers, patents, projects,
         f.write("UNWIND [\n")
         for i, p in enumerate(papers):
             end = ',' if i < len(papers) - 1 else ''
-            f.write(f"  [{i+1}, '{p['title']}', '{p['journal']}', '{p['doi']}', '{p['pub_date']}', {p['cited']}, '{p['subject']}', {p['impact']}]{end}\n")
+            intl = 'true' if p['international'] else 'false'
+            f.write(f"  [{i+1}, '{p['title']}', '{p['journal']}', '{p['doi']}', '{p['pub_date']}', {p['cited']}, '{p['subject']}', {p['impact']}, {intl}]{end}\n")
         f.write("] AS row\n")
-        f.write("CREATE (:Paper {id: row[0], title: row[1], journal: row[2], doi: row[3], pubDate: date(row[4]), citedNum: row[5], subjectField: row[6], impactFactor: row[7]});\n\n")
+        f.write("CREATE (:Paper {id: row[0], title: row[1], journal: row[2], doi: row[3], pubDate: date(row[4]), citedNum: row[5], subjectField: row[6], impactFactor: row[7], international: row[8]});\n\n")
         
         # 4. 专利节点 (注意: MySQL title -> Neo4j name, type -> patentType)
         f.write(f"// 4. 创建专利节点 ({len(patents)}项) - 属性映射: title→name, type→patentType\n")
@@ -742,9 +841,10 @@ def write_cypher(filename, institutions, researchers, papers, patents, projects,
         for i, pat in enumerate(patents):
             grant = f"'{pat['grant_date']}'" if pat['grant_date'] else 'NULL'
             end = ',' if i < len(patents) - 1 else ''
-            f.write(f"  [{i+1}, '{pat['name']}', '{pat['patent_no']}', '{pat['apply_date']}', {grant}, '{pat['patent_type']}', '{pat['status']}']{end}\n")
+            xfer = 'true' if pat['transferred'] else 'false'
+            f.write(f"  [{i+1}, '{pat['name']}', '{pat['patent_no']}', '{pat['apply_date']}', {grant}, '{pat['patent_type']}', '{pat['status']}', {xfer}, {pat['transfer_amount']:.1f}]{end}\n")
         f.write("] AS row\n")
-        f.write("CREATE (:Patent {id: row[0], name: row[1], patentNo: row[2], applyDate: date(row[3]), grantDate: CASE WHEN row[4] IS NULL THEN NULL ELSE date(row[4]) END, patentType: row[5], status: row[6]});\n\n")
+        f.write("CREATE (:Patent {id: row[0], name: row[1], patentNo: row[2], applyDate: date(row[3]), grantDate: CASE WHEN row[4] IS NULL THEN NULL ELSE date(row[4]) END, patentType: row[5], status: row[6], transferred: row[7], transferAmount: row[8]});\n\n")
         
         # 5. 项目节点 (注意: MySQL name -> projName, level -> projLevel, total_funding -> fund)
         f.write(f"// 5. 创建项目节点 ({len(projects)}个) - 属性映射: name→projName, level→projLevel, total_funding→fund\n")
@@ -813,7 +913,17 @@ def write_cypher(filename, institutions, researchers, papers, patents, projects,
         f.write("(wc2:WeightConfig {id: 2, discipline: '理学', paperWeight: 0.60, patentWeight: 0.10, projectWeight: 0.30, decayRate: 0.05}),\n")
         f.write("(wc3:WeightConfig {id: 3, discipline: '人文社科', paperWeight: 0.50, patentWeight: 0.10, projectWeight: 0.40, decayRate: 0.03}),\n")
         f.write("(wc4:WeightConfig {id: 4, discipline: '医学', paperWeight: 0.40, patentWeight: 0.20, projectWeight: 0.40, decayRate: 0.04}),\n")
-        f.write("(wc5:WeightConfig {id: 5, discipline: '管理学', paperWeight: 0.35, patentWeight: 0.25, projectWeight: 0.40, decayRate: 0.04});\n")
+        f.write("(wc5:WeightConfig {id: 5, discipline: '管理学', paperWeight: 0.35, patentWeight: 0.25, projectWeight: 0.40, decayRate: 0.04});\n\n")
+
+        # 12. CITES 引用关系
+        f.write(f"// 12. 创建论文引用关系 (CITES) - {len(citations)}条\n")
+        f.write("UNWIND [\n")
+        for i, (citing_id, cited_id) in enumerate(citations):
+            end = ',' if i < len(citations) - 1 else ''
+            f.write(f"  [{citing_id}, {cited_id}]{end}\n")
+        f.write("] AS pair\n")
+        f.write("MATCH (p1:Paper {id: pair[0]}), (p2:Paper {id: pair[1]})\n")
+        f.write("CREATE (p1)-[:CITES]->(p2);\n")
 
 # ============================================================
 # 主函数
@@ -849,23 +959,27 @@ def main():
     
     print("[6/6] 生成关联关系...")
     paper_r, patent_r, project_r, cooperate = generate_relationships(
-        len(researchers), len(papers), len(patents), len(projects))
+        researchers, len(papers), len(patents), len(projects))
     print(f"  -> 论文-作者: {len(paper_r)} 条")
     print(f"  -> 专利-发明人: {len(patent_r)} 条")
     print(f"  -> 项目-成员: {len(project_r)} 条")
     print(f"  -> 合作关系: {len(cooperate)} 条")
+
+    # 引用关系必须在其它数据生成之后（保持既有随机序列不变，仅追加引用数据）
+    citations = generate_citations(papers)
+    print(f"  -> 论文引用: {len(citations)} 条")
     
     print("\n写入 MySQL 脚本...")
     sql_file = os.path.join(script_dir, 'test-data.sql')
     write_sql(sql_file, institutions, researchers, papers, patents, projects,
-              paper_r, patent_r, project_r)
+              paper_r, patent_r, project_r, citations)
     sql_size = os.path.getsize(sql_file)
     print(f"  -> {sql_file} ({sql_size / 1024:.1f} KB)")
     
     print("\n写入 Neo4j Cypher 脚本...")
     cypher_file = os.path.join(script_dir, 'neo4j-test-data.cypher')
     write_cypher(cypher_file, institutions, researchers, papers, patents, projects,
-                 paper_r, patent_r, project_r, cooperate)
+                 paper_r, patent_r, project_r, cooperate, citations)
     cypher_size = os.path.getsize(cypher_file)
     print(f"  -> {cypher_file} ({cypher_size / 1024:.1f} KB)")
     
@@ -876,7 +990,7 @@ def main():
     print(f"  论文:     {len(papers):>5} 篇")
     print(f"  专利:     {len(patents):>5} 项")
     print(f"  项目:     {len(projects):>5} 个")
-    print(f"  关联关系: {len(paper_r) + len(patent_r) + len(project_r) + len(cooperate):>5} 条")
+    print(f"  关联关系: {len(paper_r) + len(patent_r) + len(project_r) + len(cooperate) + len(citations):>5} 条（含论文引用 {len(citations)} 条）")
     print("=" * 60)
 
 if __name__ == '__main__':

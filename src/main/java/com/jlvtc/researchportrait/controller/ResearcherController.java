@@ -3,13 +3,13 @@ package com.jlvtc.researchportrait.controller;
 import com.jlvtc.researchportrait.entity.Researcher;
 import com.jlvtc.researchportrait.service.ResearcherService;
 import com.jlvtc.researchportrait.util.ExcelExportUtil;
+import com.jlvtc.researchportrait.util.PdfExportUtil;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import java.nio.charset.StandardCharsets;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -65,13 +65,18 @@ public class ResearcherController {
     }
 
     /**
-     * 导出科研人员数据为 Excel
+     * 导出科研人员数据为 Excel（轻量级版本，不加载关联关系）
      */
     @GetMapping("/export")
     public ResponseEntity<byte[]> exportExcel() {
         try {
-            List<Researcher> researchers = researcherService.findAll();
-            return buildExcelResponse(researchers);
+            List<Map<String, Object>> dataList = researcherService.exportAllSimple();
+            List<String> headers = Arrays.asList("姓名", "职称", "所属院系", "研究方向", "影响力指数");
+            byte[] excelData = ExcelExportUtil.exportToExcel(headers, dataList);
+            HttpHeaders headersResp = new HttpHeaders();
+            headersResp.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+            headersResp.setContentDispositionFormData("attachment", "talent_search_result.xlsx");
+            return ResponseEntity.ok().headers(headersResp).body(excelData);
         } catch (Exception e) {
             e.printStackTrace();
             return ResponseEntity.internalServerError().build();
@@ -135,16 +140,36 @@ public class ResearcherController {
     }
 
     /**
-     * 下载科研人员智能分析报告（Markdown 格式）
+     * 按院系刷新影响力指数（仅处理所选院系的科研人员，大幅减少耗时）
+     */
+    @PostMapping("/refresh-influence/by-institutions")
+    public Map<String, Object> refreshInfluenceByInstitutions(@RequestBody List<Long> instIds) {
+        long start = System.currentTimeMillis();
+        int count = researcherService.refreshInfluenceByInstitutions(instIds);
+        long elapsed = System.currentTimeMillis() - start;
+        Map<String, Object> resp = new LinkedHashMap<>();
+        resp.put("success", true);
+        resp.put("refreshedCount", count);
+        resp.put("elapsedMs", elapsed);
+        return resp;
+    }
+
+    /**
+     * 下载科研人员智能分析报告（PDF 格式，由 Markdown 报告渲染生成）
      */
     @GetMapping("/report/{id}")
     public ResponseEntity<byte[]> downloadReport(@PathVariable Long id) {
-        String report = researcherService.generateAnalysisReport(id);
-        byte[] bytes = report.getBytes(StandardCharsets.UTF_8);
-        HttpHeaders headers = new HttpHeaders();
-        headers.setContentType(MediaType.TEXT_PLAIN);
-        headers.setContentDispositionFormData("attachment", "researcher_report_" + id + ".md");
-        return ResponseEntity.ok().headers(headers).body(bytes);
+        try {
+            String report = researcherService.generateAnalysisReport(id);
+            byte[] pdfBytes = PdfExportUtil.markdownToPdf(report);
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_PDF);
+            headers.setContentDispositionFormData("attachment", "researcher_report_" + id + ".pdf");
+            return ResponseEntity.ok().headers(headers).body(pdfBytes);
+        } catch (Exception e) {
+            e.printStackTrace();
+            return ResponseEntity.internalServerError().build();
+        }
     }
 
     private ResponseEntity<byte[]> buildExcelResponse(List<Researcher> researchers) throws Exception {

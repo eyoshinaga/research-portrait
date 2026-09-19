@@ -173,6 +173,17 @@
         .gfp-toggle-switch input:checked + .gfp-switch-slider { background: var(--primary-color); }
         .gfp-toggle-switch input:checked + .gfp-switch-slider::before { transform: translateX(18px); }
         #g-keyword-body { margin-top: 10px; }
+
+        /* 画像弹窗：智能标签 chips 与项目层级分布 */
+        .tag-chip { display: inline-block; padding: 4px 12px; border-radius: 12px; font-size: 12px; margin: 0 6px 6px 0; }
+        .tag-chip[data-cat="研究方向"] { background: #e6f7ff; color: #1890ff; }
+        .tag-chip[data-cat="学术影响力"] { background: #fff7e6; color: #fa8c16; }
+        .tag-chip[data-cat="科研产出"] { background: #f6ffed; color: #52c41a; }
+        .tag-chip[data-cat="项目层级"] { background: #f9f0ff; color: #722ed1; }
+        .tag-chip[data-cat="合作交流"] { background: #fff0f6; color: #eb2f96; }
+        .level-stat { flex: 1; text-align: center; background: var(--bg-light); border-radius: 8px; padding: 10px 6px; }
+        .level-stat .lv-name { font-size: 12px; color: var(--text-secondary); margin-bottom: 4px; }
+        .level-stat .lv-val { font-size: 17px; font-weight: 600; color: var(--primary-color); }
     </style>
 </head>
 <body>
@@ -185,7 +196,9 @@
         <button id="export-btn" class="primary">导出报表</button>
         <button id="back-toggle" style="display:none;">返回图谱</button>
         <button id="talent-toggle">人才发现</button>
+        <button id="group-toggle">群体对比</button>
         <button id="analysis-toggle">院系对标</button>
+        <button id="weight-toggle">权重配置</button>
         <div style="width: 1px; height: 20px; background: var(--border-color);"></div>
         <button id="zoomIn">+</button>
         <button id="zoomOut">-</button>
@@ -256,7 +269,7 @@
     <div class="modal-header">
         <h3 id="modal-title">科研人员多维画像</h3>
         <div style="display: flex; align-items: center; gap: 12px;">
-            <button id="report-download-btn" class="primary" style="padding: 4px 12px; font-size: 13px;" onclick="downloadReport()">下载分析报告</button>
+            <button id="report-download-btn" class="primary" style="padding: 4px 12px; font-size: 13px;" onclick="downloadReport()">下载 PDF 报告</button>
             <span class="close-btn" onclick="closeModal()">&times;</span>
         </div>
     </div>
@@ -267,6 +280,18 @@
             <div class="info-item"><div class="info-label">研究方向</div><div class="info-value" id="p-field">-</div></div>
             <div class="info-item"><div class="info-label">学术影响力指数</div><div class="info-value" id="p-index" style="color: var(--danger-color);">-</div></div>
             <div class="info-item"><div class="info-label">累计项目经费</div><div class="info-value" id="p-fund">-</div></div>
+        </div>
+
+        <!-- 智能标签体系（多源成果数据融合自动生成） -->
+        <div style="margin-bottom: 20px;">
+            <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; font-weight: 500;">智能标签</div>
+            <div id="p-tags"></div>
+        </div>
+
+        <!-- 项目层级分布 -->
+        <div style="margin-bottom: 20px;">
+            <div style="font-size: 13px; color: var(--text-secondary); margin-bottom: 8px; font-weight: 500;">项目层级分布</div>
+            <div id="p-level-bars" style="display: flex; gap: 12px;"></div>
         </div>
 
         <div class="tabs">
@@ -282,6 +307,10 @@
             <div id="topic-chart" style="width: 100%; height: 380px;"></div>
         </div>
         <div id="content-coop" style="display:none;">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+                <div style="font-size:13px; color:var(--text-secondary);">直接合作者 Top5（基于论文/专利/项目共同成果）</div>
+                <button class="primary" style="padding:6px 12px; font-size:13px;" onclick="exploreCooperationNetwork()">在主图谱中探查二级合作网络</button>
+            </div>
             <div id="cooperation-chart" style="width: 100%; height: 380px;"></div>
             <div class="result-list" id="collab-list" style="margin-top: 15px;"></div>
             <div style="margin-top: 10px; font-size: 13px; color: var(--text-secondary);" id="cross-disc-info"></div>
@@ -337,11 +366,86 @@
             <div class="loading">加载院系列表...</div>
         </div>
         <button onclick="compareSelectedInsts()" class="primary" style="width: 100%; margin-top: 16px; margin-bottom: 10px;">生成对比报告</button>
+        <button onclick="downloadBriefPdf()" style="width: 100%; margin-bottom: 10px; border-color: var(--warning-color); color: var(--warning-color);">生成分析简报（PDF）</button>
         <button onclick="triggerRefreshAllInfluence()" style="width: 100%; border-color: var(--secondary-color); color: var(--secondary-color);">刷新影响力指数</button>
     </div>
     <div class="view-main">
         <div id="radar-chart" style="width: 100%; height: 500px;"></div>
+
+        <!-- 维度钻取入口：选择钻取机构后点击维度按钮，层层下钻查看二级指标、计算方式与原始成果清单 -->
+        <div id="drill-bar" style="margin-top: 12px; display: flex; gap: 8px; flex-wrap: wrap; align-items: center;"></div>
+
+        <!-- 维度钻取结果面板 -->
+        <div id="drill-panel" style="margin-top: 16px; background: #fff; border-radius: 10px; box-shadow: var(--shadow-sm); padding: 20px; display: none;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px;">
+                <div style="font-size: 15px; font-weight: 600;" id="drill-title">维度钻取</div>
+                <span class="close-btn" style="font-size: 20px;" onclick="closeDrillPanel()">&times;</span>
+            </div>
+            <div id="drill-formula" style="font-size: 13px; color: var(--text-secondary); background: var(--bg-light); padding: 10px 12px; border-radius: 6px; margin-bottom: 14px;"></div>
+            <div id="drill-level2" style="margin-bottom: 14px;"></div>
+            <div id="drill-items"></div>
+        </div>
+
         <div id="analysis-summary" style="margin-top: 20px; font-size: 14px; color: var(--text-secondary); line-height: 1.6;"></div>
+    </div>
+</div>
+
+<!-- 权重配置专用画面（管理员后台：动态权重算法配置） -->
+<div id="weight-view" class="full-view">
+    <div class="view-sidebar">
+        <div class="panel-title">动态权重算法配置</div>
+        <div style="font-size:13px; color:var(--text-secondary); line-height:1.8; margin-bottom:16px;">
+            评价模型按学科门类差异化管理：<br/>
+            · 工学类侧重专利与横向项目<br/>
+            · 理学类侧重高水平论文<br/>
+            · 各学科可单独设置论文/专利/项目权重与时间衰减系数<br/>
+            · 时间衰减函数 W(t)=W₀×e^(−λt)：根据成果发表、项目结题时间的远近自动降低其影响力贡献权重
+        </div>
+        <button onclick="saveWeightConfigs()" class="primary" style="width:100%; margin-bottom:10px;">保存全部修改</button>
+        <button onclick="resetWeightConfigs()" style="width:100%; margin-bottom:10px;">恢复默认模板</button>
+        <button onclick="triggerRefreshInfluenceAll()" style="width:100%; border-color: var(--secondary-color); color: var(--secondary-color);">重算全部影响力指数</button>
+        <div id="weight-msg" style="margin-top:12px; font-size:13px; color:var(--text-secondary); line-height:1.6;"></div>
+    </div>
+    <div class="view-main">
+        <div id="weight-table-wrapper"><div class="loading">正在加载权重配置...</div></div>
+        <div style="margin-top:16px; font-size:13px; color:var(--text-secondary); line-height:1.8;">
+            说明：权重系数与衰减系数取值均在 0~1 之间。保存后点击「重算全部影响力指数」即可按新权重重新计算全校科研人员的影响力指数；每日凌晨 2:00 的定时任务也会自动按最新权重重算。
+        </div>
+    </div>
+</div>
+
+<!-- 群体对比分析专用画面（按学科/职称/院系/人才类别聚合对比） -->
+<div id="group-view" class="full-view">
+    <div class="view-sidebar">
+        <div class="panel-title">多维度群体对比</div>
+        <div class="filter-item">
+            <label>划分维度</label>
+            <select id="gcmp-dimension" onchange="loadGroupCompare()">
+                <option value="discipline">学科领域</option>
+                <option value="title">职称级别</option>
+                <option value="department">所属院系</option>
+                <option value="talentCategory">人才类别</option>
+            </select>
+        </div>
+        <div class="filter-item">
+            <label>对比指标</label>
+            <select id="gcmp-metric" onchange="renderGroupCharts()">
+                <option value="avgInfluence">平均影响力指数</option>
+                <option value="avgPapers">人均论文数</option>
+                <option value="avgPatents">人均专利数</option>
+                <option value="avgProjects">人均项目数</option>
+                <option value="avgCooperators">人均合作者数（合作广度）</option>
+                <option value="paperCount">论文总数</option>
+                <option value="fundSum">项目经费合计（万元）</option>
+                <option value="intlPaperCount">国际合作论文数</option>
+                <option value="transferredPatentCount">转化专利数</option>
+            </select>
+        </div>
+        <div id="gcmp-summary" style="margin-top: 16px; font-size: 13px; color: var(--text-secondary); line-height: 1.8;"></div>
+    </div>
+    <div class="view-main">
+        <div id="gcmp-bar-chart" style="width: 100%; height: 380px;"></div>
+        <div id="gcmp-trend-chart" style="width: 100%; height: 360px; margin-top: 20px;"></div>
     </div>
 </div>
 
@@ -407,6 +511,17 @@
         'source': '项目来源'
     };
 
+    // 关系类型中文映射（用于图谱连线与边提示）
+    const relationLabelMap = {
+        'COOPERATE_WITH': '合作',
+        'CITES': '引用',
+        'BELONG_TO': '隶属',
+        'WRITE': '发表',
+        'INVENT': '申请专利',
+        'CHARGE': '承担',
+        'PARTICIPATE': '参与'
+    };
+
     const categories = [
         { name: '科研人员', itemStyle: { color: '#1890ff' } },
         { name: '院系', itemStyle: { color: '#52c41a' } },
@@ -423,13 +538,67 @@
         'Project':    ['projName', 'projLevel', 'source', 'status']
     };
 
+    // 各类别对应的 categories 索引
+    const categoryIndexMap = {};
+    categories.forEach((c, i) => { categoryIndexMap[c.name] = i; });
+
     // 渲染图谱
     function renderGraph(nodes, links) {
         const nodeMap = new Map();
         nodes.forEach(n => nodeMap.set(n.id, n));
         const uniqueNodes = Array.from(nodeMap.values());
+        // 有效节点id集合（字符串化），用于过滤孤立边
+        const validIds = new Set(uniqueNodes.map(n => String(n.id)));
 
-        option = {
+        // 社群着色：节点带 communityId（合作网络探查视图）时按社群配色
+        const hasCommunity = uniqueNodes.some(n => n.communityId > 0);
+        // 学术社群配色
+        const communityPalette = ['#5470c6', '#91cc75', '#fac858', '#ee6666', '#73c0de', '#3ba272', '#fc8452', '#9a60b4', '#ea7ccc', '#48b8d0'];
+
+        const seriesData = uniqueNodes.map(item => {
+            const label = item.labels?.[0];
+            const props = item.props || {};
+            const zhLabel = labelMap[label] || '其他';
+            // Institution 节点：有 parentId 的是二级（小），无 parentId 的是一级（大）
+            let size = 36;
+            if (label === 'Institution') {
+                size = (props.parentId != null) ? 22 : 44;
+            }
+            // 合作网络探查视图：中心节点 > 一级合作者 > 二级合作者
+            if (item.coopLevel === 0) size = 56;
+            else if (item.coopLevel === 1) size = 44;
+            else if (item.coopLevel === 2) size = 32;
+            // 核心枢纽学者：金色描边高亮并放大；社群成员：按社群配色
+            const isHub = item.isHub === true;
+            if (isHub) size += 8;
+            const communityId = item.communityId > 0 ? item.communityId : 0;
+            const nodeStyle = {};
+            if (isHub) { nodeStyle.borderColor = '#faad14'; nodeStyle.borderWidth = 3; }
+            if (hasCommunity && communityId > 0) {
+                nodeStyle.color = communityPalette[(communityId - 1) % communityPalette.length];
+            }
+            return {
+                id: String(item.id),
+                name: (props.name || props.instName || props.title || props.projName || item.id + '').toString(),
+                // category 必须是数字索引，不能是字符串
+                category: categoryIndexMap[zhLabel] ?? (categories.length - 1),
+                props: props,
+                symbolSize: size,
+                itemStyle: nodeStyle,
+                // 网络分析附加信息（供 tooltip 展示）
+                degree: item.degree,
+                hubScore: item.hubScore,
+                isHub: isHub,
+                communityId: communityId,
+                label: { show: true, fontSize: 12, width: 80, overflow: 'truncate' }
+            };
+        });
+
+        const seriesLinks = links
+            .map(l => ({ source: String(l.source), target: String(l.target), name: relationLabelMap[l.type] || l.type || '' }))
+            .filter(l => validIds.has(l.source) && validIds.has(l.target));
+
+        const option = {
             tooltip: {
                 trigger: 'item',
                 formatter: params => {
@@ -437,19 +606,27 @@
                         if (params.dataType === 'node') {
                             const d = params.data || {};
                             const p = d.props || {};
-                            // 根据节点标签获取中文类型名作为标题
-                            const rawLabel = d.category || 'Other';
-                            const zhLabel = labelMap[rawLabel] || rawLabel;
+                            const catIdx = d.category ?? 0;
+                            const zhLabel = categories[catIdx]?.name || '其他';
                             let tip = `<div style="font-weight:bold;font-size:14px;">${d.name || '未知'}</div>`;
                             tip += `<div style="font-size:12px;color:#888;">类型：${zhLabel}</div><hr style="margin:4px 0"/>`;
                             Object.entries(p).forEach(([k, v]) => {
                                 const zhKey = propMap[k] || k;
                                 tip += `${zhKey}: ${v || '-'}<br/>`;
                             });
+                            // 合作网络分析信息（仅探查视图的科研人员节点具备）
+                            if (d.isHub) {
+                                tip += `<span style="color:#fa8c16;">★ 核心枢纽学者（网络度 ${d.degree}，枢纽指数 ${d.hubScore}）</span><br/>`;
+                            } else if (d.degree > 0) {
+                                tip += `合作网络度：${d.degree}<br/>`;
+                            }
+                            if (d.communityId > 0) {
+                                tip += `所属学术社群：社群 ${d.communityId}<br/>`;
+                            }
                             return tip;
                         }
-                        return params.data?.name || '';
-                    } catch (e) { return params.data?.name || '加载中' }
+                        return params.data?.name ? `关系：${params.data.name}` : '';
+                    } catch (e) { return params.data?.name || '加载中'; }
                 }
             },
             legend: [{ data: categories.map(c => c.name), top: 10, left: 'center' }],
@@ -460,20 +637,11 @@
                 type: 'graph', layout: 'force', roam: true, draggable: true,
                 focusNodeAdjacency: true,
                 force: { repulsion: 1200, edgeLength: 160, gravity: 0.1, friction: 0.6 },
-                data: uniqueNodes.map(item => ({
-                    id: item.id,
-                    name: (item.props?.name || item.props?.instName || item.props?.title || item.props?.projName || item.id + '').toString(),
-                    category: labelMap[item.labels?.[0]] || '其他',
-                    props: item.props || {},
-                    symbolSize: 36,
-                    label: { show: true, fontSize: 12, width: 80, overflow: 'truncate' }
-                })),
-                links: links.map(l => ({
-                    source: l.source, target: l.target, name: l.type || ''
-                })),
+                data: seriesData,
+                links: seriesLinks,
                 categories: categories,
                 labelLayout: { hideOverlap: true },
-                lineStyle: { curveness: 0.2 }
+                lineStyle: { curveness: 0.2, opacity: 0.8 }
             }]
         };
         myChart.setOption(option, true);
@@ -511,9 +679,14 @@
     // ✅ 单击显示画像弹窗
     // ============================
     myChart.on('click', async (params) => {
-        if (params.dataType !== 'node' || params.data.category !== '科研人员') return; // 仅科研人员可打开画像
+        if (params.dataType !== 'node') return;
+        // category 现在是数字索引，判断是否是科研人员
+        const catIdx = params.data?.category ?? -1;
+        if (categories[catIdx]?.name !== '科研人员') return;
         
-        const id = params.data.id;
+        // 注意：图谱节点 id 是 Neo4j 内部 id，而画像/合作分析/报告接口均按业务属性 id 查询，
+        // 因此这里优先取节点属性中的业务 id（props.id = Researcher.id），保证点击后画像数据正确
+        const id = params.data.props?.id ?? params.data.id;
         currentProfileId = id;
         try {
             const res = await fetch(`/portrait/api/researcher/profile/${id}`);
@@ -527,6 +700,8 @@
             document.getElementById('p-field').innerText = r.researchField || '-';
             document.getElementById('p-index').innerText = r.influenceIndex ? r.influenceIndex.toFixed(2) : '待计算';
             document.getElementById('p-fund').innerText = data.totalFunding ? data.totalFunding.toFixed(1) : '0.0';
+            // 渲染智能标签 chips 与项目层级分布
+            renderProfileExtras(data);
 
             // 先显示弹窗，切换到产出趋势标签页
             document.getElementById('profile-modal').style.display = 'block';
@@ -549,7 +724,7 @@
     document.getElementById('modal-overlay').onclick = closeModal;
 
     // ============================
-    // ✅ 下载智能分析报告
+    // ✅ 下载智能分析报告（PDF 格式，后端由 Markdown 报告渲染生成）
     // ============================
     function downloadReport() {
         if (!currentProfileId) {
@@ -560,11 +735,33 @@
     }
 
     // ============================
+    // ✅ 渲染画像扩展信息：智能标签 chips 与项目层级分布
+    // ============================
+    function renderProfileExtras(data) {
+        // 1. 智能标签 chips（多源成果数据融合自动生成）
+        const tagsEl = document.getElementById('p-tags');
+        const tags = data.intelligentTags || [];
+        tagsEl.innerHTML = tags.length === 0
+            ? '<span style="font-size:12px; color:#999;">暂未生成标签（需完善成果数据）</span>'
+            : tags.map(t => `<span class="tag-chip" data-cat="${t.category || ''}">${t.name || ''}</span>`).join('');
+
+        // 2. 项目层级分布（国家级 / 省部级 / 横向）
+        const dist = data.projectLevelDistribution || {};
+        document.getElementById('p-level-bars').innerHTML = ['国家级', '省部级', '横向'].map(k => `
+            <div class="level-stat">
+                <div class="lv-name">${k}</div>
+                <div class="lv-val">${dist[k] || 0}<span style="font-size:12px; font-weight:400; color:var(--text-secondary);"> 项</span></div>
+            </div>`).join('');
+    }
+
+    // ============================
     // ✅ 画面切换逻辑 (图谱 / 人才发现 / 院系对标)
     // ============================
     const graphContainer = document.getElementById('graph-container');
     const talentView = document.getElementById('talent-view');
     const analysisView = document.getElementById('analysis-view');
+    const weightView = document.getElementById('weight-view');
+    const groupView = document.getElementById('group-view');
     const backBtn = document.getElementById('back-toggle');
     let institutionsLoaded = false;
 
@@ -573,7 +770,9 @@
     function showGraphView() {
         graphContainer.style.display = 'block';
         talentView.classList.remove('active');
+        groupView.classList.remove('active');
         analysisView.classList.remove('active');
+        weightView.classList.remove('active');
         backBtn.style.display = 'none';
         graphFilterPanel.style.display = '';
         setTimeout(() => myChart.resize(), 100);
@@ -582,7 +781,9 @@
     function showTalentView() {
         graphContainer.style.display = 'none';
         talentView.classList.add('active');
+        groupView.classList.remove('active');
         analysisView.classList.remove('active');
+        weightView.classList.remove('active');
         backBtn.style.display = '';
         graphFilterPanel.style.display = 'none';
     }
@@ -590,7 +791,9 @@
     function showAnalysisView() {
         graphContainer.style.display = 'none';
         talentView.classList.remove('active');
+        groupView.classList.remove('active');
         analysisView.classList.add('active');
+        weightView.classList.remove('active');
         backBtn.style.display = '';
         graphFilterPanel.style.display = 'none';
         if (!institutionsLoaded) {
@@ -601,8 +804,39 @@
         }
     }
 
+    function showWeightView() {
+        graphContainer.style.display = 'none';
+        talentView.classList.remove('active');
+        groupView.classList.remove('active');
+        analysisView.classList.remove('active');
+        weightView.classList.add('active');
+        backBtn.style.display = '';
+        graphFilterPanel.style.display = 'none';
+        loadWeightConfigs();
+    }
+
+    function showGroupView() {
+        graphContainer.style.display = 'none';
+        talentView.classList.remove('active');
+        groupView.classList.add('active');
+        analysisView.classList.remove('active');
+        weightView.classList.remove('active');
+        backBtn.style.display = '';
+        graphFilterPanel.style.display = 'none';
+        if (!groupCompareData) {
+            loadGroupCompare();
+        } else {
+            setTimeout(() => {
+                if (groupBarChart) groupBarChart.resize();
+                if (groupTrendChart) groupTrendChart.resize();
+            }, 100);
+        }
+    }
+
     document.getElementById('talent-toggle').onclick = showTalentView;
+    document.getElementById('group-toggle').onclick = showGroupView;
     document.getElementById('analysis-toggle').onclick = showAnalysisView;
+    document.getElementById('weight-toggle').onclick = showWeightView;
     backBtn.onclick = showGraphView;
 
     async function executeTalentSearch() {
@@ -724,9 +958,10 @@
     async function locateResearcher(id) {
         currentProfileId = id;
         // 1. 图谱中高亮定位（不使用 alert，避免阻塞导致错位）
+        //    参数 id 为业务属性 id；图谱节点 id 是 Neo4j 内部 id，需按 props.id 匹配
         if (option) {
             const seriesData = option.series[0].data;
-            const dataIndex = seriesData.findIndex(d => String(d.id) === String(id));
+            const dataIndex = seriesData.findIndex(d => String(d.props?.id) === String(id));
             if (dataIndex >= 0) {
                 myChart.dispatchAction({ type: 'unfocusNodeAdjacency' });
                 myChart.dispatchAction({ type: 'focusNodeAdjacency', seriesIndex: 0, dataIndex: dataIndex });
@@ -746,6 +981,8 @@
             document.getElementById('p-field').innerText = r.researchField || '-';
             document.getElementById('p-index').innerText = r.influenceIndex ? r.influenceIndex.toFixed(2) : '待计算';
             document.getElementById('p-fund').innerText = data.totalFunding ? data.totalFunding.toFixed(1) : '0.0';
+            // 渲染智能标签 chips 与项目层级分布
+            renderProfileExtras(data);
 
             // 先显示弹窗，切换到产出趋势标签页
             document.getElementById('profile-modal').style.display = 'block';
@@ -870,6 +1107,37 @@
     }
 
     // ============================
+    // ✅ 二级合作网络探查：以当前科研人员为中心，在主图谱中展开
+    //    直接合作者（一级）+ 通过合作者延伸出的合作者（二级）
+    // ============================
+    async function exploreCooperationNetwork() {
+        if (!currentProfileId) { alert('请先选择科研人员'); return; }
+        try {
+            const res = await fetch(`/portrait/api/graph/cooperation-network/${currentProfileId}`);
+            const data = await res.json();
+            if (!data.nodes || data.nodes.length === 0) {
+                alert('未找到该科研人员的合作网络数据');
+                return;
+            }
+            // 用合作网络数据替换当前图谱（中心 + 一级合作者 + 二级合作者）
+            allNodes = data.nodes;
+            allLinks = data.links || [];
+            graphFullyLoaded = false;
+            renderGraph(allNodes, allLinks);
+            closeModal();
+            showGraphView();
+            const hubCount = (data.hubs || []).length;
+            const commCount = data.communityCount || 0;
+            document.getElementById('g-filter-info').innerHTML =
+                `二级合作网络：「${data.center?.props?.name || ''}」<br/>一级合作者 ${data.level1Count} 人，二级合作者 ${data.level2Count} 人（双击节点可继续展开）<br/>` +
+                `全图合作网络分析：核心枢纽学者 ${hubCount} 位（金色描边高亮），学术社群 ${commCount} 个（节点颜色 = 社群归属）`;
+        } catch (e) {
+            console.error('二级合作网络探查失败', e);
+            alert('二级合作网络探查失败，请检查控制台');
+        }
+    }
+
+    // ============================
     // ✅ 院系对标 - 院系列表加载与搜索
     // ============================
     let radarChart = null;
@@ -879,14 +1147,14 @@
         const container = document.getElementById('inst-checkboxes');
         try {
             const res = await fetch('/portrait/api/institution/all');
-            const insts = await res.json();
-            if (!insts || insts.length === 0) {
+            const tree = await res.json();
+            if (!tree || tree.length === 0) {
                 container.innerHTML = '<p style="color:#999; font-size:13px; text-align:center; padding:20px;">暂无院系数据</p>';
                 document.getElementById('inst-count').innerText = '共 0 个院系';
                 return;
             }
-            allInstitutions = insts;
-            renderInstitutionList(insts);
+            allInstitutions = tree;
+            renderInstitutionList(tree);
             updateInstCount();
             compareSelectedInsts();
         } catch (e) {
@@ -895,24 +1163,48 @@
         }
     }
 
-    function renderInstitutionList(insts) {
+    function renderInstitutionList(tree) {
         const container = document.getElementById('inst-checkboxes');
-        if (insts.length === 0) {
-            container.innerHTML = '<p style="color:#999; font-size:13px; text-align:center; padding:20px;">未找到匹配的院系</p>';
-            return;
-        }
-        container.innerHTML = insts.map(inst => `
-            <label>
-                <input type="checkbox" value="${inst.id}" checked> ${inst.name}
-            </label>
-        `).join('');
+        // tree 可能是完整树结构，也可能是标准数组（搜索过滤后）
+        let html = '';
+        tree.forEach(parent => {
+            const children = parent.children || [];
+            const parentStyle = 'font-weight:600; color:var(--text-primary); display:flex; align-items:center; gap:6px; padding:6px 4px; border-bottom:1px solid var(--border-color);';
+            html += `<label style="${parentStyle}">
+                <input type="checkbox" value="${parent.id}" checked>
+                <span>🏢 ${parent.name}</span>
+            </label>`;
+            if (children.length > 0) {
+                const childStyle = 'display:flex; align-items:center; gap:6px; padding:4px 4px 4px 22px; font-size:13px; color:var(--text-secondary);';
+                children.forEach(child => {
+                    html += `<label style="${childStyle}">
+                        <input type="checkbox" value="${child.id}" checked>
+                        <span>↳ ${child.name}</span>
+                    </label>`;
+                });
+            }
+        });
+        container.innerHTML = html || '<p style="color:#999; font-size:13px; text-align:center; padding:20px;">未找到匹配的院系</p>';
     }
 
     function filterInstitutions() {
         const keyword = document.getElementById('inst-search').value.toLowerCase().trim();
-        const filtered = allInstitutions.filter(inst =>
-            (inst.name || '').toLowerCase().includes(keyword)
-        );
+        if (!keyword) {
+            renderInstitutionList(allInstitutions);
+            updateInstCount();
+            return;
+        }
+        // 对树进行关键词过滤，保留匹配的父节点和子节点
+        const filtered = [];
+        allInstitutions.forEach(parent => {
+            const parentMatch = (parent.name || '').toLowerCase().includes(keyword);
+            const matchedChildren = (parent.children || []).filter(c =>
+                (c.name || '').toLowerCase().includes(keyword)
+            );
+            if (parentMatch || matchedChildren.length > 0) {
+                filtered.push({ ...parent, children: parentMatch ? (parent.children || []) : matchedChildren });
+            }
+        });
         renderInstitutionList(filtered);
         updateInstCount();
     }
@@ -932,16 +1224,26 @@
     // 监听复选框变化，实时更新计数
     document.getElementById('inst-checkboxes').addEventListener('change', updateInstCount);
 
-    // 手动触发全量刷新影响力指数
+    // 按所选院系刷新影响力指数（仅处理所选院系的科研人员，大幅提升速度）
     async function triggerRefreshAllInfluence() {
+        // 获取当前选中的院系 ID
+        const checkboxes = document.querySelectorAll('#inst-checkboxes input:checked');
+        const ids = Array.from(checkboxes).map(cb => parseInt(cb.value));
+        if (ids.length === 0) {
+            alert('请先选择至少一个院系');
+            return;
+        }
         const btn = document.querySelector('button[onclick="triggerRefreshAllInfluence()"]');
-        if (btn) { btn.disabled = true; btn.innerText = '刷新中...'; }
+        if (btn) { btn.disabled = true; btn.innerText = `刷新中（${ids.length}个院系）...`; }
         try {
-            const res = await fetch('/portrait/api/researcher/refresh-influence/all', { method: 'POST' });
+            const res = await fetch('/portrait/api/researcher/refresh-influence/by-institutions', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(ids)
+            });
             const data = await res.json();
             if (data.success) {
-                alert(`影响力指数已刷新！共处理 ${data.refreshedCount} 人，耗时 ${data.elapsedMs}ms`);
-                // 刷新雷达图数据
+                alert(`影响力指数已刷新！共处理 ${data.refreshedCount} 人，耗时 ${(data.elapsedMs / 1000).toFixed(1)}秒`);
                 compareSelectedInsts();
             } else {
                 alert('刷新失败，请查看控制台');
@@ -950,6 +1252,135 @@
             alert('刷新失败：' + e.message);
         } finally {
             if (btn) { btn.disabled = false; btn.innerText = '刷新影响力指数'; }
+        }
+    }
+
+    // ============================
+    // ✅ 权重配置画面（管理员后台：动态权重算法配置）
+    // ============================
+    let weightConfigs = [];
+
+    // 各学科调节说明（对应验收要求的学科差异性适配）
+    const disciplineHints = {
+        '工学': '侧重专利与横向项目',
+        '理学': '侧重高水平论文',
+        '人文社科': '侧重论文与项目',
+        '医学': '论文、项目均衡',
+        '管理学': '项目权重较高'
+    };
+
+    async function loadWeightConfigs() {
+        const wrapper = document.getElementById('weight-table-wrapper');
+        wrapper.innerHTML = '<div class="loading">正在加载权重配置...</div>';
+        try {
+            const res = await fetch('/portrait/api/weight-config/list');
+            weightConfigs = await res.json();
+            renderWeightTable();
+        } catch (e) {
+            wrapper.innerHTML = '<div class="loading">权重配置加载失败</div>';
+            console.error('加载权重配置失败', e);
+        }
+    }
+
+    function renderWeightTable() {
+        const wrapper = document.getElementById('weight-table-wrapper');
+        if (!weightConfigs || weightConfigs.length === 0) {
+            wrapper.innerHTML = '<div class="loading">暂无权重配置数据</div>';
+            return;
+        }
+        const inputStyle = 'width:90px; padding:6px 8px; border:1px solid var(--border-color); border-radius:4px; font-size:14px;';
+        let html = `<div class="talent-table-wrapper"><table class="talent-table">
+            <thead><tr>
+                <th>学科门类</th><th>论文权重</th><th>专利权重</th><th>项目权重</th><th>时间衰减系数 λ</th><th>学科特点</th>
+            </tr></thead><tbody>`;
+        weightConfigs.forEach((c, idx) => {
+            html += `<tr style="cursor:default;">
+                <td class="col-name">${c.discipline || '-'}</td>
+                <td><input type="number" min="0" max="1" step="0.05" value="${c.paperWeight ?? ''}" data-idx="${idx}" data-field="paperWeight" style="${inputStyle}" /></td>
+                <td><input type="number" min="0" max="1" step="0.05" value="${c.patentWeight ?? ''}" data-idx="${idx}" data-field="patentWeight" style="${inputStyle}" /></td>
+                <td><input type="number" min="0" max="1" step="0.05" value="${c.projectWeight ?? ''}" data-idx="${idx}" data-field="projectWeight" style="${inputStyle}" /></td>
+                <td><input type="number" min="0" max="1" step="0.01" value="${c.decayRate ?? ''}" data-idx="${idx}" data-field="decayRate" style="${inputStyle}" /></td>
+                <td style="font-size:12px; color:var(--text-secondary);">${disciplineHints[c.discipline] || ''}</td>
+            </tr>`;
+        });
+        html += '</tbody></table></div>';
+        wrapper.innerHTML = html;
+    }
+
+    async function saveWeightConfigs() {
+        const inputs = document.querySelectorAll('#weight-table-wrapper input[data-idx]');
+        const updates = new Map(); // idx -> {field: value}
+        for (const inp of inputs) {
+            const idx = parseInt(inp.dataset.idx);
+            const field = inp.dataset.field;
+            const val = parseFloat(inp.value);
+            if (isNaN(val) || val < 0 || val > 1) {
+                alert(`「${weightConfigs[idx]?.discipline || ''}」的输入值必须在 0~1 之间`);
+                inp.focus();
+                return;
+            }
+            if (!updates.has(idx)) updates.set(idx, {});
+            updates.get(idx)[field] = val;
+        }
+        const msg = document.getElementById('weight-msg');
+        msg.style.color = 'var(--text-secondary)';
+        msg.innerText = '正在保存...';
+        try {
+            for (const [idx, fields] of updates) {
+                const merged = { ...weightConfigs[idx], ...fields };
+                const res = await fetch('/portrait/api/weight-config/update', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(merged)
+                });
+                if (!res.ok) {
+                    const err = await res.json().catch(() => ({}));
+                    throw new Error(err.message || ('HTTP ' + res.status));
+                }
+            }
+            msg.style.color = 'var(--secondary-color)';
+            msg.innerText = '权重已保存。如需立即生效，请点击「重算全部影响力指数」。';
+            await loadWeightConfigs();
+        } catch (e) {
+            msg.style.color = 'var(--danger-color)';
+            msg.innerText = '保存失败：' + e.message;
+        }
+    }
+
+    async function resetWeightConfigs() {
+        if (!confirm('确定将所有学科恢复为默认权重模板吗？')) return;
+        const msg = document.getElementById('weight-msg');
+        msg.style.color = 'var(--text-secondary)';
+        msg.innerText = '正在恢复默认模板...';
+        try {
+            const res = await fetch('/portrait/api/weight-config/reset', { method: 'POST' });
+            weightConfigs = await res.json();
+            renderWeightTable();
+            msg.style.color = 'var(--secondary-color)';
+            msg.innerText = '已恢复默认权重模板。如需立即生效，请点击「重算全部影响力指数」。';
+        } catch (e) {
+            msg.style.color = 'var(--danger-color)';
+            msg.innerText = '恢复失败：' + e.message;
+        }
+    }
+
+    async function triggerRefreshInfluenceAll() {
+        if (!confirm('将按当前权重配置重算全部科研人员的影响力指数，过程可能需要数十秒，确定继续吗？')) return;
+        const msg = document.getElementById('weight-msg');
+        msg.style.color = 'var(--text-secondary)';
+        msg.innerText = '正在重算影响力指数（分批处理中，请耐心等待）...';
+        try {
+            const res = await fetch('/portrait/api/researcher/refresh-influence/all', { method: 'POST' });
+            const data = await res.json();
+            if (data.success) {
+                msg.style.color = 'var(--secondary-color)';
+                msg.innerText = `重算完成：共处理 ${data.refreshedCount} 人，耗时 ${(data.elapsedMs / 1000).toFixed(1)} 秒`;
+            } else {
+                throw new Error('服务返回失败');
+            }
+        } catch (e) {
+            msg.style.color = 'var(--danger-color)';
+            msg.innerText = '重算失败：' + e.message;
         }
     }
 
@@ -1015,6 +1446,9 @@
                 }]
             });
 
+            // 渲染维度钻取入口（机构下拉 + 维度按钮）
+            renderDrillBar(data);
+
             // 生成文字对比结论
             const summaryLines = data.map(inst => {
                 const dims = inst.dimensions;
@@ -1029,6 +1463,195 @@
             console.error('对比失败', e);
             document.getElementById('analysis-summary').innerHTML = `<p style="color:#f00;">对比失败：${e.message}</p>`;
         }
+    }
+
+    // ============================
+    // ✅ 雷达维度钻取与溯源（二级指标 + 计算方式 + 原始成果清单）
+    // ============================
+    let drillInstId = null;
+    const RADAR_DIMENSIONS = ['科研规模', '科研质量', '学术影响力', '科研效率', '学术合作', '国际合作', '成果转化'];
+
+    function renderDrillBar(institutions) {
+        const bar = document.getElementById('drill-bar');
+        if (!institutions || institutions.length === 0) { bar.innerHTML = ''; return; }
+        drillInstId = institutions[0].institutionId;
+        bar.innerHTML =
+            `<span style="font-size: 13px; color: var(--text-secondary);">钻取机构：</span>` +
+            `<select id="drill-inst-select" style="padding: 6px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 13px;" onchange="drillInstId = parseInt(this.value)">` +
+            institutions.map(i => `<option value="${i.institutionId}">${i.institutionName}</option>`).join('') +
+            `</select>` +
+            `<span style="font-size: 13px; color: var(--text-secondary); margin-left: 8px;">点击维度下钻查看构成指标与原始清单：</span>` +
+            RADAR_DIMENSIONS.map(d => `<button style="padding: 5px 12px; font-size: 13px;" onclick="drillDimension('${d}')">${d}</button>`).join('');
+    }
+
+    async function drillDimension(dimension) {
+        if (!drillInstId) { alert('请先选择钻取机构'); return; }
+        try {
+            const res = await fetch(`/portrait/api/institution/drill/${drillInstId}?dimension=${encodeURIComponent(dimension)}`);
+            const data = await res.json();
+            if (!data || !data.formula) {
+                alert('该维度暂无可钻取数据');
+                return;
+            }
+            document.getElementById('drill-panel').style.display = 'block';
+            document.getElementById('drill-title').innerText =
+                `维度钻取：${data.institutionName} — ${data.dimension}（得分 ${data.score != null ? Number(data.score).toFixed(1) : '-'}）`;
+            document.getElementById('drill-formula').innerHTML = `<strong>计算方式：</strong>${data.formula}`;
+
+            // 二级指标卡片
+            const level2 = data.level2 || [];
+            document.getElementById('drill-level2').innerHTML =
+                `<div style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">二级指标</div>` +
+                (level2.length === 0 ? '<span style="font-size:13px; color:#999;">暂无</span>' :
+                `<div style="display: flex; gap: 12px; flex-wrap: wrap;">` +
+                level2.map(i => `
+                    <div class="info-item" style="min-width: 150px;">
+                        <div class="info-label">${i.name}</div>
+                        <div class="info-value">${i.value != null ? i.value : '-'} <span style="font-size: 12px; font-weight: 400; color: var(--text-secondary);">${i.unit || ''}</span></div>
+                    </div>`).join('') + `</div>`);
+
+            // 原始成果清单
+            const items = data.items || {};
+            const cols = items.columns || [];
+            const rows = items.rows || [];
+            document.getElementById('drill-items').innerHTML =
+                `<div style="font-size: 13px; font-weight: 600; margin-bottom: 8px;">${items.title || '原始成果清单'}（共 ${rows.length} 条）</div>` +
+                (rows.length === 0 ? '<p style="color: #999; font-size: 13px;">暂无数据</p>' :
+                `<div style="overflow-x: auto;"><table class="talent-table" style="font-size: 13px;">
+                    <thead><tr>${cols.map(c => `<th style="cursor: default;">${c}</th>`).join('')}</tr></thead>
+                    <tbody>${rows.map(r => `<tr style="cursor: default;">${r.map(v => `<td>${v != null ? v : '-'}</td>`).join('')}</tr>`).join('')}</tbody>
+                </table></div>`);
+            document.getElementById('drill-panel').scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        } catch (e) {
+            console.error('维度钻取失败', e);
+            alert('维度钻取失败，请查看控制台');
+        }
+    }
+
+    function closeDrillPanel() {
+        document.getElementById('drill-panel').style.display = 'none';
+    }
+
+    // ============================
+    // ✅ 下载机构竞争力分析简报（PDF，后端基于对标结果自动生成）
+    // ============================
+    async function downloadBriefPdf() {
+        const checkboxes = document.querySelectorAll('#inst-checkboxes input:checked');
+        const ids = Array.from(checkboxes).map(cb => parseInt(cb.value));
+        if (ids.length < 2) {
+            alert('请至少选择 2 个院系生成对标简报（列表中第一个选中的机构作为主机构）');
+            return;
+        }
+        try {
+            const res = await fetch(`/portrait/api/institution/brief-pdf?ids=${ids.join(',')}`);
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            const blob = await res.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = 'institution_competitiveness_brief.pdf';
+            a.click();
+            window.URL.revokeObjectURL(url);
+        } catch (e) {
+            console.error('简报下载失败', e);
+            alert('简报生成失败：' + e.message);
+        }
+    }
+
+    // ============================
+    // ✅ 多维度群体对比分析（学科领域 / 职称级别 / 所属院系 / 人才类别）
+    // ============================
+    let groupBarChart = null;
+    let groupTrendChart = null;
+    let groupCompareData = null;
+
+    const groupDimensionLabels = { discipline: '学科领域', title: '职称级别', department: '所属院系', talentCategory: '人才类别' };
+    const groupMetricLabels = {
+        avgInfluence: '平均影响力指数', avgPapers: '人均论文数', avgPatents: '人均专利数',
+        avgProjects: '人均项目数', avgCooperators: '人均合作者数（合作广度）', paperCount: '论文总数',
+        fundSum: '项目经费合计（万元）', intlPaperCount: '国际合作论文数', transferredPatentCount: '转化专利数'
+    };
+
+    async function loadGroupCompare() {
+        const dimension = document.getElementById('gcmp-dimension').value;
+        const summaryEl = document.getElementById('gcmp-summary');
+        summaryEl.innerHTML = '正在按维度聚合分析...';
+        try {
+            const res = await fetch(`/portrait/api/analysis/group-compare?dimension=${dimension}`);
+            groupCompareData = await res.json();
+            renderGroupCharts();
+        } catch (e) {
+            console.error('群体对比加载失败', e);
+            summaryEl.innerText = '加载失败，请重试';
+        }
+    }
+
+    function renderGroupCharts() {
+        if (!groupCompareData || !groupCompareData.groups || groupCompareData.groups.length === 0) return;
+        const groups = groupCompareData.groups;
+        const dimKey = groupCompareData.dimension || 'discipline';
+        const metric = document.getElementById('gcmp-metric').value;
+
+        // 1. 群体指标对比柱状图
+        if (groupBarChart) groupBarChart.dispose();
+        groupBarChart = echarts.init(document.getElementById('gcmp-bar-chart'));
+        const maxVal = Math.max(...groups.map(g => Number(g[metric]) || 0), 1);
+        groupBarChart.setOption({
+            title: { text: `按${groupDimensionLabels[dimKey] || dimKey}划分 — ${groupMetricLabels[metric] || metric}对比`, left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis', formatter: params => {
+                const p = params[0];
+                const g = groups[p.dataIndex];
+                return `<b>${g.groupName}</b>（${g.count} 人）<br/>` +
+                    `${groupMetricLabels[metric] || metric}：${p.value}<br/>` +
+                    `论文 ${g.paperCount} 篇 / 专利 ${g.patentCount} 项 / 项目 ${g.projectCount} 个<br/>` +
+                    `国际合作论文 ${g.intlPaperCount} 篇 / 转化专利 ${g.transferredPatentCount} 项`;
+            } },
+            grid: { left: 60, right: 30, top: 50, bottom: groups.length > 8 ? 70 : 40 },
+            xAxis: { type: 'category', data: groups.map(g => g.groupName), axisLabel: { rotate: groups.length > 8 ? 30 : 0, interval: 0, fontSize: 11 } },
+            yAxis: { type: 'value', max: Math.ceil(maxVal * 1.15) },
+            series: [{
+                type: 'bar',
+                data: groups.map(g => Number(g[metric]) || 0),
+                barMaxWidth: 48,
+                itemStyle: { color: '#5470c6', borderRadius: [4, 4, 0, 0] },
+                label: { show: true, position: 'top', fontSize: 11, color: '#595959' }
+            }]
+        });
+
+        // 2. 各群体年度论文产出趋势
+        if (groupTrendChart) groupTrendChart.dispose();
+        groupTrendChart = echarts.init(document.getElementById('gcmp-trend-chart'));
+        const yearSet = new Set();
+        groups.forEach(g => Object.keys(g.byYear || {}).forEach(y => yearSet.add(y)));
+        const years = Array.from(yearSet).sort();
+        const trendPalette = ['#5470c6','#91cc75','#fac858','#ee6666','#73c0de','#3ba272','#fc8452','#9a60b4','#ea7ccc','#48b8d0','#c4ccd3','#6e7079'];
+        const trendGroups = groups.slice(0, 12);
+        groupTrendChart.setOption({
+            title: { text: '各群体年度论文产出趋势', left: 'center', textStyle: { fontSize: 14 } },
+            tooltip: { trigger: 'axis' },
+            legend: { bottom: 0, type: 'scroll', icon: 'roundRect' },
+            grid: { left: 60, right: 30, top: 45, bottom: 70 },
+            xAxis: { type: 'category', data: years },
+            yAxis: { type: 'value' },
+            series: trendGroups.map((g, i) => ({
+                name: g.groupName,
+                type: 'line',
+                smooth: true,
+                symbolSize: 6,
+                data: years.map(y => (g.byYear || {})[y] || 0),
+                itemStyle: { color: trendPalette[i % trendPalette.length] },
+                lineStyle: { width: 2 }
+            }))
+        });
+
+        // 3. 侧边汇总统计
+        const totalPeople = groups.reduce((s, g) => s + (g.count || 0), 0);
+        const topGroup = [...groups].sort((a, b) => (Number(b[metric]) || 0) - (Number(a[metric]) || 0))[0];
+        document.getElementById('gcmp-summary').innerHTML =
+            `<strong>聚合结果：</strong><br/>` +
+            `划分为 <b>${groups.length}</b> 个群体，覆盖科研人员 <b>${totalPeople}</b> 人。<br/>` +
+            `「${groupMetricLabels[metric] || metric}」最高：<b>${topGroup.groupName}</b>（${Number(topGroup[metric]) || 0}）。<br/>` +
+            `趋势图展示各群体年度论文产出对比（最多展示 12 个群体）。`;
     }
 
     // 搜索定位
@@ -1052,19 +1675,39 @@
         graphFilterPanel.classList.toggle('collapsed');
     }
 
-    // 加载院系列表到筛选下拉框
+    // 加载院系列表到筛选下拉框（二级结构）
     let graphInstitutionsLoaded = false;
     async function loadGraphInstitutions() {
         if (graphInstitutionsLoaded) return;
         try {
             const res = await fetch('/portrait/api/institution/all');
-            const insts = await res.json();
+            const tree = await res.json(); // [{id, name, level:1, children:[...]}, ...]
             const select = document.getElementById('g-filter-inst');
-            insts.forEach(inst => {
-                const opt = document.createElement('option');
-                opt.value = inst.name;
-                opt.textContent = inst.name;
-                select.appendChild(opt);
+            tree.forEach(parent => {
+                const children = parent.children || [];
+                if (children.length > 0) {
+                    // 有下属系：用 optgroup 包裹
+                    const group = document.createElement('optgroup');
+                    group.label = parent.name;
+                    // 一级院系自身可选（含所有下属系）
+                    const parentOpt = document.createElement('option');
+                    parentOpt.value = '__parent__' + parent.name;
+                    parentOpt.textContent = '■ ' + parent.name + '（全部）';
+                    group.appendChild(parentOpt);
+                    children.forEach(child => {
+                        const opt = document.createElement('option');
+                        opt.value = child.name;
+                        opt.textContent = '   ◦ ' + child.name;
+                        group.appendChild(opt);
+                    });
+                    select.appendChild(group);
+                } else {
+                    // 无下属系：直接添加
+                    const opt = document.createElement('option');
+                    opt.value = parent.name;
+                    opt.textContent = parent.name;
+                    select.appendChild(opt);
+                }
             });
             graphInstitutionsLoaded = true;
         } catch (e) { console.error('加载院系列表失败', e); }
@@ -1077,44 +1720,102 @@
 
     // 应用筛选
     function applyGraphFilter() {
+        // 如果尚未加载完整图谱，先加载再筛选
+        if (!graphFullyLoaded) {
+            document.getElementById('g-filter-info').innerText = '正在加载完整图谱数据...';
+            fetch('/portrait/api/graph/full')
+                .then(r => r.json())
+                .then(data => {
+                    allNodes = data.nodes || [];
+                    allLinks = data.links || [];
+                    graphFullyLoaded = true;
+                    doApplyGraphFilter();
+                }).catch(e => { console.error(e); alert('全量图谱加载失败'); });
+        } else {
+            doApplyGraphFilter();
+        }
+    }
+
+    function doApplyGraphFilter() {
         let nodes = [...allNodes];
         let links = [...allLinks];
         let filterDesc = [];
 
         // 1. 院系筛选
-        const instName = document.getElementById('g-filter-inst').value;
-        if (instName) {
-            // 找到该院系的所有科研人员ID
-            const researcherIds = new Set();
-            nodes.forEach(n => {
-                if (n.labels?.includes('Researcher') && n.props?.department === instName) {
-                    researcherIds.add(n.id);
+        const rawInstVal = document.getElementById('g-filter-inst').value;
+        if (rawInstVal) {
+            // 判断是否选了一级院系的"全部"选项
+            const isParentAll = rawInstVal.startsWith('__parent__');
+            const instName = isParentAll ? rawInstVal.slice('__parent__'.length) : rawInstVal;
+
+            // Step1: 找到匹配名称的 Institution 节点id
+            const instNodeIds = new Set();
+            allNodes.forEach(n => {
+                if (n.labels?.includes('Institution')) {
+                    const p = n.props || {};
+                    const nodeName = p.instName || p.name || '';
+                    if (nodeName === instName) {
+                        instNodeIds.add(String(n.id));
+                    }
                 }
             });
-            // 从科研人员出发，扩展他们的论文、专利、项目（只保留这三类关联节点）
+
+            // Step1b: 如果是一级院系的"全部"，将所有下属二级机构节点也加入
+            if (isParentAll) {
+                // 找到一级院系的 Neo4j 内部id（数字）作为 parentId
+                const parentNodeNeo4jIds = new Set();
+                allNodes.forEach(n => {
+                    if (n.labels?.includes('Institution')) {
+                        const p = n.props || {};
+                        const nodeName = p.instName || p.name || '';
+                        if (nodeName === instName) {
+                            // props.id 是 Neo4j 自定义 id 属性
+                            if (p.id != null) parentNodeNeo4jIds.add(String(p.id));
+                        }
+                    }
+                });
+                allNodes.forEach(n => {
+                    if (n.labels?.includes('Institution')) {
+                        const p = n.props || {};
+                        if (p.parentId != null && parentNodeNeo4jIds.has(String(p.parentId))) {
+                            instNodeIds.add(String(n.id));
+                        }
+                    }
+                });
+            }
+
+            // Step2: 通过 BELONG_TO 关系边找到属于这些机构的 Researcher
+            const researcherIds = new Set();
+            allLinks.forEach(l => {
+                if (l.type === 'BELONG_TO') {
+                    if (instNodeIds.has(String(l.target))) {
+                        researcherIds.add(String(l.source));
+                    }
+                }
+            });
+
+            // Step3: 从 Researcher 出发，扩展关联的论文、专利、项目；同时保留选中的 Institution 节点
             const allowedLabels = new Set(['Researcher', 'Paper', 'Patent', 'Project']);
             const expandedIds = new Set(researcherIds);
-            links.forEach(l => {
-                const sourceInResearcher = researcherIds.has(l.source);
-                const targetInResearcher = researcherIds.has(l.target);
-                if (sourceInResearcher || targetInResearcher) {
-                    // 找到对方节点
-                    const otherId = sourceInResearcher ? l.target : l.source;
-                    const otherNode = allNodes.find(n => n.id === otherId);
-                    // 只添加论文、专利、项目类型的关联节点
-                    if (otherNode && otherNode.labels?.some(lb => allowedLabels.has(lb))) {
+            instNodeIds.forEach(id => expandedIds.add(id));
+            allLinks.forEach(l => {
+                const srcId = String(l.source);
+                const tgtId = String(l.target);
+                const srcIsResearcher = researcherIds.has(srcId);
+                const tgtIsResearcher = researcherIds.has(tgtId);
+                if (srcIsResearcher || tgtIsResearcher) {
+                    const otherId = srcIsResearcher ? tgtId : srcId;
+                    const otherNode = allNodes.find(n => String(n.id) === otherId);
+                    if (otherNode && (otherNode.labels?.some(lb => allowedLabels.has(lb)) || instNodeIds.has(otherId))) {
                         expandedIds.add(otherId);
-                    }
-                    // 科研人员之间的关系也保留
-                    if (sourceInResearcher && targetInResearcher) {
-                        expandedIds.add(l.source);
-                        expandedIds.add(l.target);
                     }
                 }
             });
-            nodes = nodes.filter(n => expandedIds.has(n.id));
-            links = links.filter(l => expandedIds.has(l.source) && expandedIds.has(l.target));
-            filterDesc.push(`院系: ${instName}（科研人员 ${researcherIds.size} 人）`);
+
+            nodes = allNodes.filter(n => expandedIds.has(String(n.id)));
+            links = allLinks.filter(l => expandedIds.has(String(l.source)) && expandedIds.has(String(l.target)));
+            const label = isParentAll ? `${instName}（含下属系）` : instName;
+            filterDesc.push(`院系: ${label}（科研人员 ${researcherIds.size} 人）`);
         }
 
         // 2. 分类关键词检索（仅当开关启用时执行）
@@ -1175,19 +1876,20 @@
         const andRadio = document.querySelector('input[name="g-filter-mode"][value="AND"]');
         if (andRadio) andRadio.checked = true;
         renderGraph(allNodes, allLinks);
-        document.getElementById('g-filter-info').innerText = `显示全部节点: ${allNodes.length} 个`;
+        document.getElementById('g-filter-info').innerText = `显示全部节点: ${allNodes.length} 个（已加载完整图谱）`;
+        graphFullyLoaded = true;
     }
 
-    // 加载全量图谱
-    fetch('/portrait/api/graph/full')
+    // 加载采样图谱（初始页面仅显示部分节点，避免全量加载导致OOM和慢响应）
+    let graphFullyLoaded = false;
+    fetch('/portrait/api/graph/sample')
         .then(r => r.json())
         .then(data => {
             allNodes = data.nodes || [];
             allLinks = data.links || [];
             renderGraph(allNodes, allLinks);
-            // 加载院系列表用于筛选
             loadGraphInstitutions();
-            document.getElementById('g-filter-info').innerText = `显示全部节点: ${allNodes.length} 个`;
+            document.getElementById('g-filter-info').innerText = `显示采样节点: ${allNodes.length} 个（请通过筛选条件或双击节点探索更多）`;
         }).catch(e => { console.error(e); alert('图谱加载失败') });
 
     // 事件
@@ -1205,18 +1907,18 @@
     document.getElementById('resetView').onclick = () => {
         myChart.dispatchAction({ type: 'restore' });
         myChart.dispatchAction({ type: 'unfocusNodeAdjacency' });
-        fetch('/portrait/api/graph/full').then(r=>r.json()).then(d=>{ allNodes=d.nodes||[]; allLinks=d.links||[]; renderGraph(allNodes,allLinks); resetGraphFilter(); });
+        fetch('/portrait/api/graph/sample').then(r=>r.json()).then(d=>{ allNodes=d.nodes||[]; allLinks=d.links||[]; renderGraph(allNodes,allLinks); resetGraphFilter(); });
     };
 
-    // 图例筛选（中文图例名与英文标签的映射）
+    // 图例筛选
     myChart.on('legendselectchanged', p => {
         const sel = p.selected;
         const nodes = allNodes.filter(n => {
             const zhLabel = labelMap[n.labels?.[0]] || '其他';
             return sel[zhLabel] !== false;
         });
-        const ids = new Set(nodes.map(n => n.id));
-        const links = allLinks.filter(l => ids.has(l.source) && ids.has(l.target));
+        const ids = new Set(nodes.map(n => String(n.id)));
+        const links = allLinks.filter(l => ids.has(String(l.source)) && ids.has(String(l.target)));
         renderGraph(nodes, links);
     });
 

@@ -32,6 +32,10 @@ public class Paper {
     @Property("impactFactor")
     private Double impactFactor;
 
+    /** 是否国际合作论文（true=国际合作，false=非国际合作） */
+    @Property("international")
+    private Boolean international;
+
     public Paper() {}
 
     // getter & setter
@@ -97,5 +101,13 @@ public class Paper {
 
     public void setImpactFactor(Double impactFactor) {
         this.impactFactor = impactFactor;
+    }
+
+    public Boolean getInternational() {
+        return international;
+    }
+
+    public void setInternational(Boolean international) {
+        this.international = international;
     }
 }

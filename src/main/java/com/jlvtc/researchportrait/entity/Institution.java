@@ -21,6 +21,9 @@ public class Institution {
     @Property("country")
     private String country;
 
+    @Property("parentId")
+    private Long parentId;
+
     public Institution() {}
 
     public Institution(String instName, String type) {
@@ -67,5 +70,13 @@ public class Institution {
 
     public void setCountry(String country) {
         this.country = country;
+    }
+
+    public Long getParentId() {
+        return parentId;
+    }
+
+    public void setParentId(Long parentId) {
+        this.parentId = parentId;
     }
 }
